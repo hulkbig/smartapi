@@ -1,0 +1,7 @@
+# Developer-only override; ordinary installs use published images.
+services:
+  smartapi:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: smartapi:local

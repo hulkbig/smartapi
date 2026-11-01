@@ -1,0 +1,25 @@
+# Initialize accounts/routes/keys with the regular Compose first. Uses /data/state.
+name: smartapi
+services:
+  smartapi:
+    image: ${SMARTAPI_IMAGE:-bighulk/smartapi:1.0.0}
+    command: ["-data-dir", "/data/state", "-config", "/etc/smartapi/config.yaml", "-headless"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:17810:7890"
+    volumes:
+      - smartapi-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  smartapi-data:
+    name: ${SMARTAPI_DATA_VOLUME:-smartapi-data}
