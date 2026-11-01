@@ -195,7 +195,7 @@ assert.match(source, /protocol\.protocol==='openai-images'\)\{caps\.text=false;c
 assert.match(source, /Protocol automatic conversion/, 'text protocol tabs must expose their conversion switch');
 assert.match(styles, /\.protocol-overrides>\.field\{align-content:start\}/, 'protocol override controls must keep equal top alignment');
 assert.match(source, /Native image API/, 'the image protocol must explicitly remain native-only');
-assert.match(source, /FERRY BRIDGES/, 'converted models must be grouped in a dedicated read-only bridge layer');
+assert.match(source, /SMARTAPI BRIDGES/, 'converted models must be grouped in a dedicated read-only bridge layer');
 assert.match(source, /provider-bridge-cluster|protocol-bridge-cluster/, 'conversion coverage must cluster by native target protocol');
 assert.match(source, /data-wizard="provider-native-input"/, 'native models must support direct Enter-to-add input');
 assert.match(source, /manualModels/, 'real detection must preserve manually assigned protocol models');
