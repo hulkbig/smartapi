@@ -1,6 +1,6 @@
 services:
   smartapi:
-    image: ${SMARTAPI_IMAGE:-bighulk/smartapi:1.0.0}
+    image: ${SMARTAPI_IMAGE:-bighulk/smartapi:1.0.1}
     # Preserve the layout of existing source-built installations.
     command: ["-data-dir", "/data", "-config", "/etc/smartapi/config.yaml"]
     init: true

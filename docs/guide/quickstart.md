@@ -11,7 +11,7 @@ curl -fsSLo compose.yaml https://github.com/hulkbig/smartapi/releases/latest/dow
 docker compose up -d --no-build
 ```
 
-Compose 会自动拉取对应架构的 `bighulk/smartapi:1.0.0` 镜像。配置和记录保存在命名卷 `smartapi-data` 中。已有安装请按[升级指南](docker.md#升级)操作；不要把旧数据目录当成空目录重新初始化。
+Compose 会自动拉取对应架构的 `bighulk/smartapi:1.0.1` 镜像。配置和记录保存在命名卷 `smartapi-data` 中。已有安装请按[升级指南](docker.md#升级)操作；不要把旧数据目录当成空目录重新初始化。
 
 ```sh
 curl -fsS http://localhost:17810/health

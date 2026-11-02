@@ -7,7 +7,7 @@
 在空目录执行：
 
 ```sh
-curl -fsSLo compose.yaml https://github.com/hulkbig/smartapi/releases/download/v1.0.0/compose.yaml
+curl -fsSLo compose.yaml https://github.com/hulkbig/smartapi/releases/download/v1.0.1/compose.yaml
 docker compose up -d --no-build
 docker compose ps
 docker compose logs --tail=100 smartapi
