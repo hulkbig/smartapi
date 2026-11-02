@@ -1,6 +1,6 @@
 # Headless operation
 
-Available in 1.0.0; while this is a release candidate, do not assume the image is already published. Version 1.0.0 does not support these flags.
+This page applies to SmartAPI 1.0.1; the ordinary prebuilt image supports runtime headless mode.
 
 A normal SmartAPI binary can run with `-headless`. It opens no management HTTP listener and starts no optional alert polling, version checks, model/catalog sync, scheduled messages, automatic quota resets or reference-pricing sync. Authentication, routing, quotas, request ledger, conversation continuity, cooldown persistence and account-token refresh remain active. `-standby` still disables account refresh.
 
@@ -12,11 +12,11 @@ Configure accounts/routes/client keys first. Headless has no online management U
 
 ## Docker without building
 
-The ordinary 1.0.0 prebuilt image supports runtime headless mode. Initialize using the [regular Docker setup](guide/docker.en.md), stop that instance, then use the same named data volume:
+The ordinary 1.0.1 prebuilt image supports runtime headless mode. Initialize using the [regular Docker setup](guide/docker.en.md), stop that instance, then use the same named data volume:
 
 ```sh
 docker compose down
-curl -fsSLo compose.headless.yaml https://raw.githubusercontent.com/hulkbig/smartapi/v1.0.0/deploy/compose.headless.yaml
+curl -fsSLo compose.headless.yaml https://raw.githubusercontent.com/hulkbig/smartapi/v1.0.1/deploy/compose.headless.yaml
 docker compose -f compose.headless.yaml up -d --no-build
 ```
 

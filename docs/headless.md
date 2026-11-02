@@ -1,6 +1,6 @@
 # 无界面运行
 
-本页适用于 1.0.0。审阅阶段仍是候选，发行前请继续使用已发布版本；1.0.0 不包含这些参数。
+本页适用于 SmartAPI 1.0.1；普通预构建镜像支持运行时 headless 模式。
 
 SmartAPI 可以只启动推理服务。普通二进制增加 `-headless` 参数；已有 SQLite 配置和数据目录继续使用。
 
@@ -27,11 +27,11 @@ go build -tags headless -o smartapi-headless ./cmd/smartapi
 
 ## Docker 使用方式
 
-1.0.0 的普通预构建镜像支持运行时 `-headless`，不需要重新编译。先按 [Docker 指南](guide/docker.md) 完成管理员、上游、路由与推理 Key 配置，再停止普通实例。下载同版本源码中的 `deploy/compose.headless.yaml`，使用相同命名卷启动：
+1.0.1 的普通预构建镜像支持运行时 `-headless`，不需要重新编译。先按 [Docker 指南](guide/docker.md) 完成管理员、上游、路由与推理 Key 配置，再停止普通实例。下载同版本源码中的 `deploy/compose.headless.yaml`，使用相同命名卷启动：
 
 ```sh
 docker compose down
-curl -fsSLo compose.headless.yaml https://raw.githubusercontent.com/hulkbig/smartapi/v1.0.0/deploy/compose.headless.yaml
+curl -fsSLo compose.headless.yaml https://raw.githubusercontent.com/hulkbig/smartapi/v1.0.1/deploy/compose.headless.yaml
 docker compose -f compose.headless.yaml up -d --no-build
 ```
 

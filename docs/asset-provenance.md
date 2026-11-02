@@ -5,8 +5,9 @@ The shipped console includes `web/console/brand.svg`, its reverse variant and
 image, external icon package or asset CDN. CSS font names use fonts installed on
 the client; they do not redistribute those fonts.
 
-The SmartAPI mark uses the maintainer-selected interlocking geometric shape, with
-negative space suggesting a lowercase f. The solid charcoal (#242424) and white
+The SmartAPI mark is an original geometric S drawn for this project on
+2026-11-02, with diagonally cut terminals suggesting a continuous request path.
+It replaces the former Ferry mark with lowercase-f negative space. The solid charcoal (#242424) and white
 variants share the same outline, used by the sidebar, login and favicon.
 This records its implementation history, not trademark clearance.
 

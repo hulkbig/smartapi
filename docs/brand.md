@@ -47,18 +47,18 @@ README 负责让人看懂价值并开始使用；指南负责完成一个具体�
 
 ## 配图语言
 
-采用抽象的软件科技视觉，以请求路径、等待、切换和受控管理为主体。不要把 SmartAPI 画成真实的船、码头或运输场景。保留现有 Logo，配图用途、语言版本与来源见[README 配图](assets/README.md)。
+采用抽象的软件科技视觉，以请求路径、等待、切换和受控管理为主体。不要把 SmartAPI 画成真实的船、码头或运输场景。使用 SmartAPI S 形 Logo，配图用途、语言版本与来源见[README 配图](assets/README.md)。
 
 ## 名称与技术标识
 
 命令、Skill、容器服务和新发布产物使用小写 `smartapi`，连接环境变量使用 `SMARTAPI_` 前缀。保持一个名称，不另加 AI 或 API 后缀。界面继续使用模型、渠道、路由、Key 等功能名称。
 
-沿用当前几何图标，来源见[图形资产说明](asset-provenance.md)。版权主体仍为 hulkbig；上游项目名称与版权声明保持原样。
+使用 SmartAPI S 形几何图标，来源见[图形资产说明](asset-provenance.md)。版权主体仍为 hulkbig；上游项目名称与版权声明保持原样。
 
 当前 Go module 保持 `ferry`，内部导入路径与持久化协议不随品牌修改。公开命令为 `smartapi`，入口为 `cmd/smartapi`；`cmd/ferry-receiver` 保留运维兼容。旧名称的兼容范围见[迁移说明](guide/migration.md)。
 
 ## 正式图标
 
-主标采用两端相扣的几何造型，中间留白形成小写 f，表达 Agent 与模型的连接。主色为炭黑 `#242424`，深色背景使用 `#ffffff` 反白版；两版使用相同轮廓、透明背景、纯色填充，无渐变和阴影。
+主标为连续的 S 形路径，上下端以斜切收口，呼应 SmartAPI 的首字母与请求在网关内的流转。主色为炭黑 `#242424`，深色背景使用 `#ffffff` 反白版；两版使用相同轮廓、透明背景、纯色填充，无渐变和阴影。
 
-源文件为 `web/console/brand.svg` 与 `web/console/brand-reverse.svg`。浏览器使用 `favicon.svg`，按系统配色切换；控制台侧栏与登录页按控制台当前主题切换，包含手动覆盖。README 使用 picture 提供两版。造型来自项目自有设计稿的 04 相扣方案，颜色为六档灰度中的 02。
+源文件为 `web/console/brand.svg` 与 `web/console/brand-reverse.svg`。浏览器使用 `favicon.svg`，按系统配色切换；控制台侧栏与登录页按控制台当前主题切换，包含手动覆盖。README 使用 picture 提供两版。造型于 2026-11-02 为 SmartAPI 原创绘制，替换此前暗含小写 f 的 Ferry 图形；保留原有炭黑与反白配色。

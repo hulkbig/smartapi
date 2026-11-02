@@ -48,7 +48,7 @@ docker run -d --name smartapi --restart unless-stopped \
   -p 127.0.0.1:17910:7900 -p 127.0.0.1:17810:7890 \
   -v smartapi-data:/data --read-only --tmpfs /tmp:size=32m,mode=1777 \
   --cap-drop ALL --security-opt no-new-privileges:true \
-  bighulk/smartapi:1.0.0
+  bighulk/smartapi:1.0.1
 ```
 
 Choose one installation method; never run two processes against the same data.
