@@ -60,7 +60,7 @@ export function buildRouteViewModel(detail={},selectedSeq=Infinity) {
   const attempted=new Set(),failures=new Set();
   for(const event of visible) {
     lastEvent=event;packet=null;
-    if(event.provider_id && event.connection_id && ['CONNECTION_SELECTED','CONNECTION_REBOUND','ATTEMPT_STARTED','ADMISSION_COMPLETED','UPSTREAM_DISPATCHED','UPSTREAM_FIRST_EVENT'].includes(event.type)) {
+    if(event.provider_id && event.connection_id && ['CONNECTION_SELECTED','CONNECTION_REBOUND','ROUTE_FALLBACK','ATTEMPT_STARTED','ADMISSION_COMPLETED','UPSTREAM_DISPATCHED','UPSTREAM_FIRST_EVENT'].includes(event.type)) {
       selected={provider:event.provider_id,connection:event.connection_id,step:event.route_step||selected?.step||0};
     }
     switch(event.type) {
@@ -83,6 +83,7 @@ export function buildRouteViewModel(detail={},selectedSeq=Infinity) {
         phase=dispatched?'upstream-failed':'admission-failed';packet=dispatched?'upstream-error':null;dispatched=false;gatewayWork=null;
         failures.add(activeKey(event.provider_id,event.connection_id,event.route_step||selected?.step));break;
       case 'CONNECTION_REBOUND':case 'ROUTE_FALLBACK':case 'PROVIDER_EXHAUSTED':phase='recovering';dispatched=false;gatewayWork='recovering';break;
+      case 'RECOVERY_STOPPED':phase='recovery-stopped';dispatched=false;gatewayWork=null;break;
       case 'ATTEMPT_SUCCEEDED':
         phase='upstream-complete';dispatched=false;gatewayWork=null;packet='upstream-response';
         failures.delete(activeKey(event.provider_id,event.connection_id,event.route_step||selected?.step));break;

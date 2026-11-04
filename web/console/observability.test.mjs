@@ -71,6 +71,10 @@ vm=buildRouteViewModel({...stream,execution_trace_events:[{seq:1,type:'BODY_PARS
 assert.equal(vm.work.gateway,'parsing');assert.equal(vm.work.upstream,false);
 vm=buildRouteViewModel({...stream,execution_trace_events:[...events.slice(0,4),{seq:5,type:'STREAM_STARTED'}]});
 assert.equal(vm.packet,null,'unrelated events must not replay the last transfer');
+vm=buildRouteViewModel({...stream,execution_trace_events:[...events.slice(0,5),{seq:6,type:'PROVIDER_EXHAUSTED'},{seq:7,type:'RECOVERY_STOPPED'}]});
+assert.equal(vm.phase,'recovery-stopped');assert.deepEqual(vm.work,{gateway:null,source:null,upstream:false},'stopped recovery must not imply selection is still running');
+vm=buildRouteViewModel(stream,5);
+assert.deepEqual(vm.work,{gateway:'delivering',source:'delivering',upstream:true},'upstream streaming and client delivery can overlap');
 const burst=[{at:'2026-11-05T00:00:00Z'},{at:'2026-11-05T00:00:00.085Z'}];
 assert.equal(replayDelay(burst,0),1600);assert.equal(replayDelay(burst,0,.5),3200);
 assert.ok(replayDelay(burst,0,1,true)>2800,'a transfer completes before advancing');
