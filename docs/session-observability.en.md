@@ -16,7 +16,7 @@ Statistics use the request arrival window `[from,to)` and all selected filters t
 
 Excerpts exclude system/developer content, hidden reasoning, tool arguments, image bodies and raw headers. Recognized credential formats are redacted, but visible text may still contain sensitive information. Turning capture off does not delete existing excerpts; they follow request-history retention. There is no content backfill.
 
-Lists usually show the latest meaningful Request. Repeated input, including an identical truncated prefix, prefers an available Response. This comparison is independent of pagination and filters. Waiting, tool-only, disabled, unsupported native data, historical gaps and interrupted delivery have distinct states. Streaming excerpts contain only text delivered to the client.
+Lists usually show the latest meaningful Request. Repeated input, including an identical truncated prefix, prefers an available Response. This comparison is independent of pagination and filters. Missing excerpts are omitted from lists, source cards and details instead of displaying repeated placeholders. Request status and delivery failures remain visible. Streaming excerpts contain only text delivered to the client.
 
 ## Candidates and playback
 
@@ -24,9 +24,9 @@ The diagram shows sources → SmartAPI → all Providers and connections in the 
 
 Names and conditions are historical snapshots. Conditions can pass, fail, remain unknown or be unevaluated after short-circuiting. Execution updates append failures and recovery choices without re-probing upstreams or rewriting history using current health.
 
-Selected and active are separate: waiting for admission does not animate an upstream dispatch. Recoverable failures return to SmartAPI before following the actual next connection. The first upstream event and first visible client output are separate facts. Cancellation, restart and delivery failure do not appear as successful delivery.
+Selected connections remain distinct from calls in progress. Waiting for admission pulses only the gateway border in amber. A dispatched, unfinished call pulses the selected Provider and connection in blue; actual client output marks the delivery nodes. Upstream completion does not end a still-open client delivery. The first upstream protocol event does not prove visible client output. Recoverable failures return to SmartAPI before following the actual next connection. Cancellation, restart and delivery failure do not appear as successful delivery.
 
-Controls support playback, pause, replay, stepping, speed and returning to the latest state. Reduced motion preserves static highlighting and explanations. Hidden or offscreen views pause relevant animation or polling.
+Views initially show the current or final state; completed requests do not autoplay. Explicit historical playback is labeled as replay and supports pause, stepping, speed and returning to the latest state. At 1×, steps remain visible for at least 1.6 seconds and transfer steps for at least 3 seconds. Each transfer takes about 2.8 seconds and runs once per newly observed event or replay step; polling and relayout do not restart it. Reduced motion preserves static highlighting and explanations. Hidden or offscreen views pause relevant animation or polling.
 
 ## Provider traffic and refresh
 

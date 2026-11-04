@@ -1,4 +1,4 @@
-const visualVersion = 'smartapi-observability-brand-20261104';
+const visualVersion = 'smartapi-observability-motion-20261105';
 const partUrls = Array.from({ length: 15 }, (_, i) => `./app.part${i + 1}.jsfrag?visual=${visualVersion}`);
 const parts = await Promise.all(partUrls.map(async url => {
   const response = await fetch(url);

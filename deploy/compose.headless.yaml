@@ -2,7 +2,7 @@
 name: smartapi
 services:
   smartapi:
-    image: ${SMARTAPI_IMAGE:-bighulk/smartapi:1.1.0}
+    image: ${SMARTAPI_IMAGE:-bighulk/smartapi:1.1.1}
     command: ["-data-dir", "/data/state", "-config", "/etc/smartapi/config.yaml", "-headless"]
     restart: unless-stopped
     ports:
