@@ -9,5 +9,5 @@ import "embed"
 
 // Assets contains the dependency-free console shell, adapter and fragments.
 //
-//go:embed import.html import.js import.css index.html brand.svg brand-reverse.svg favicon.svg app-loader.js api.js mock-data.js app.part*.jsfrag styles.part*.css
+//go:embed import.html import.js import.css index.html brand.svg brand-reverse.svg favicon.svg app-loader.js api.js mock-data.js observability-model.js observability-fixtures.js observability-state.js route-explanation.js observability-icons/* app.part*.jsfrag styles.part*.css
 var Assets embed.FS

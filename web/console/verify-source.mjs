@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const parts = [];
-for (let i = 1; i <= 14; i += 1) {
+for (let i = 1; i <= 15; i += 1) {
   parts.push(await fs.readFile(new URL(`./app.part${i}.jsfrag`, import.meta.url), 'utf8'));
 }
 let source = parts.join('');

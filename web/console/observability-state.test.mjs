@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import {ObservationResource} from './observability-state.js';
+
+const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}};
+const events=[],resource=new ObservationResource((event)=>events.push(event));
+const old=deferred(),fresh=deferred();let count=0,oldSignal;
+const first=resource.load(signal=>{count++;oldSignal=signal;return old.promise});
+assert.equal(resource.load(()=>{throw new Error('overlap')}),first,'ordinary refreshes share one in-flight load');
+await Promise.resolve();
+const second=resource.load(()=>fresh.promise,{replace:true});
+await Promise.resolve();assert.equal(oldSignal.aborted,true);
+fresh.resolve({request:'new'});await second;
+old.resolve({request:'old'});await first;
+assert.equal(resource.data.request,'new','late old responses must not replace the new selection');
+assert.equal(count,1);
+await resource.load(()=>Promise.reject(new Error('offline')));
+assert.equal(resource.data.request,'new','network errors retain the last observed facts');
+assert.equal(resource.error.message,'offline');
+const left=deferred(),pending=resource.load(()=>left.promise);await Promise.resolve();resource.cancel();left.resolve({request:'after-leave'});await pending;
+assert.equal(resource.data.request,'new','leaving the view invalidates late completion');
+assert.equal(resource.loading,false);
+assert.ok(events.includes('error'));
+console.log('Observation loading, cancellation and stale response guards: PASS');

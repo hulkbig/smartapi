@@ -1,4 +1,6 @@
 import { cloneInitialData } from './mock-data.js?visual=v3-provider-relogin';
+import { observationQuery } from './observability-model.js';
+import { createObservationFixtures } from './observability-fixtures.js';
 
 const sleep = (ms = 90) => new Promise(resolve => setTimeout(resolve, ms));
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -141,6 +143,10 @@ export class SmartAPIAdapter {
   async rotateConnectionSecret(_providerId, _connectionId, _secret) { throw new Error('Not implemented'); }
   async getRequests(_filters) { throw new Error('Not implemented'); }
   async getRequest(_id) { throw new Error('Not implemented'); }
+  async getSessions(_filters,_options) { throw new Error('Sessions are unavailable'); }
+  async getSession(_id,_filters,_options) { throw new Error('Session is unavailable'); }
+  async getSessionRequests(_id,_filters,_options) { throw new Error('Session requests are unavailable'); }
+  async getProviderTraffic(_id,_filters,_options) { throw new Error('Provider traffic is unavailable'); }
   async getQueue() { throw new Error('Queue is unavailable'); }
   async getSettings() { return { debug_request_response:false, scheduled_model_sync_enabled:true, codex_usage_reset_auto:{enabled:true,threshold_minutes:20}, codex_usage_protection:{max_used_percent:98,allow_credits:false}, auto_logical_model_limit:10, backup:{enabled:true,interval_hours:24,include_history:false,s3_prefix:"ferry/scheduled",local_copies:2,remote_copies:30} }; }
   async getPricingStatus() { return {}; }
@@ -197,8 +203,9 @@ export class MockSmartAPIAdapter extends SmartAPIAdapter {
     super();
     this.mode = 'mock';
     this.data = cloneInitialData();
+    this.observability=createObservationFixtures(this.data);
     this.revision = 185;
-    this.settings = { debug_request_response:false, debug_capture_limit_bytes:262144, debug_retention:'same as request history', scheduled_model_sync_enabled:true, codex_usage_reset_auto:{enabled:true,threshold_minutes:20}, codex_usage_protection:{max_used_percent:98,allow_credits:false}, auto_logical_model_limit:10, backup:{enabled:true,interval_hours:24,include_history:false,s3_prefix:"ferry/scheduled",local_copies:2,remote_copies:30} };
+    this.settings = { observability_content_mode:'metadata_only',debug_request_response:false, debug_capture_limit_bytes:262144, debug_retention:'same as request history', scheduled_model_sync_enabled:true, codex_usage_reset_auto:{enabled:true,threshold_minutes:20}, codex_usage_protection:{max_used_percent:98,allow_credits:false}, auto_logical_model_limit:10, backup:{enabled:true,interval_hours:24,include_history:false,s3_prefix:"ferry/scheduled",local_copies:2,remote_copies:30} };
     this.apiKeySecrets = new Map(this.data.apiKeys.filter(item => item.status !== 'Revoked').map(item => [item.id, `sk-ferry-demo-${item.id}`]));
     this.managementTokens = [];
     this.oauthDevicePolls = new Map();
@@ -554,11 +561,14 @@ export class MockSmartAPIAdapter extends SmartAPIAdapter {
       if (filters.provider && !providerNames.has(item.providerId) && !providerNames.has(item.provider)) return false;
       if (filters.api_key && item.apiKey !== filters.api_key) return false;
       if (filters.conversation_id && item.conversation !== filters.conversation_id) return false;
+      if (filters.session_id && item.sessionId !== filters.session_id) return false;
+      if (filters.caller_id && item.callerIdentityId !== filters.caller_id) return false;
+      if (filters.participating_provider && ![...(item.raw?._participating||[]),...(item.raw?._pending||[])].includes(filters.participating_provider))return false;
       if (filters.outcome === 'RECOVERED_SUCCESS' && !item.recovered) return false;
-      if (filters.outcome === 'DIRECT_SUCCESS' && (item.recovered || item.failed || item.canceled)) return false;
+      if (filters.outcome === 'DIRECT_SUCCESS' && (item.recovered || item.failed || item.canceled || item.live)) return false;
       if (filters.outcome === 'FAILED' && !item.failed && !item.canceled && !String(item.result||'').toLowerCase().includes('fail')) return false;
       if (filters.status && String(item.status||(item.canceled?'canceled':item.failed?'failed':'success')).toLowerCase() !== String(filters.status).toLowerCase()) return false;
-      return !query || [item.id, item.model, item.conversation, item.apiKey, item.providerId, item.upstreamModel, item.route]
+      return !query || [item.id, item.model, item.conversation, item.apiKey, item.providerId, item.upstreamModel, item.route,item.sessionId,item.contentPreview?.request_excerpt,item.contentPreview?.response_excerpt]
         .some(value => String(value || '').toLowerCase().includes(query));
     });
     const offset=Number(filters.offset||0),limit=Number(filters.limit||filtered.length||1),items=clone(filtered.slice(offset,offset+limit));
@@ -567,18 +577,33 @@ export class MockSmartAPIAdapter extends SmartAPIAdapter {
   async getRequest(id) {
     await sleep();
     const detail = this.data.requestDetails[id];
-    if (detail) return clone(detail);
+    if (detail) return this.withMockObservation(clone(detail),id);
     const req = this.data.requests.find(x => x.id === id);
     if (!req) throw new Error(`Unknown request ${id}`);
-    return {
+    return this.withMockObservation({
       ...clone(req), connectionRebinds:0, providerFallbacks:0, conversationRebind:'No', clientConnection:'Kept Open', recoveryOverhead:'0ms',
       trace:[
         { time:req.time, title:'Request Received', sub:'Client request accepted', latency:'0ms', kind:'normal' },
         { time:req.time, title:'Connection Selected', sub:`${req.route} selected`, latency:'8ms', kind:'selected' },
         { time:req.time, title:'Response Completed', sub:'Response returned to client', latency:req.latency, kind:'success' }
       ]
-    };
+    },id);
   }
+  withMockObservation(item,id) {
+    const detail=this.observability.details.get(id);if(!detail)return item;
+    const raw=detail.client_request;
+    return {...item,sessionId:raw.session_id,callerIdentityId:raw.caller_identity_id,clientKind:raw.client_kind,contentPreview:clone(raw.content_preview),observation:clone(raw.observation),
+      routeSnapshot:clone(detail.route_snapshot),executionEvents:clone(detail.execution_trace_events),traceRevision:detail.trace_revision,eventsTruncated:0,
+      raw:{...(item.raw||{}),...clone(raw)}};
+  }
+  async getSessions(filters={}) { await sleep();return this.observability.query({...filters,mode:'session'},true); }
+  async getSession(id,filters={}) { await sleep();return this.observability.session(id,filters); }
+  async getSessionRequests(id,filters={}) {
+    await sleep();const rows=this.observability.filter({...filters,session_id:id}).toSorted((a,b)=>b.timestamp.localeCompare(a.timestamp)||b.id.localeCompare(a.id));
+    const offset=Number(filters.offset||0),limit=Number(filters.limit||50),items=rows.slice(offset,offset+limit).map(r=>this.withMockObservation(clone(this.observability.legacy.get(r.id)),r.id));
+    items.total=rows.length;items.asOf=new Date().toISOString();return items;
+  }
+  async getProviderTraffic(id='',filters={}) { await sleep();return this.observability.query({...filters,...(id?{participating_provider:id}:{})}); }
   async getQueue() {
     await sleep();
     const normalize=p=>({max_concurrent:p?.max_concurrent||0,max_queue:p?.max_queue||256,max_wait_seconds:p?.max_wait_seconds||120,queue_when_full:p?.queue_when_full!==false,queue_on_throttle:p?.queue_on_throttle!==false});
@@ -1711,7 +1736,15 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     const canceled = outcome === 'CANCELED' || outcome === 'CANCELLED' || status === 'CANCELED' || status === 'CANCELLED';
     const failed = outcome === 'FAILED' || status === 'FAILED';
     const usage = usageDetails(raw.usage);
+    if(raw.usage_state==='known'||raw.usage_state==='partial') {
+      usage.usageObserved=true;usage.tokens=compact(usage.inputTokens+usage.outputTokens);
+      usage.tokenSummary=`${compact(usage.inputTokens)} in · ${compact(usage.outputTokens)} out`;
+      usage.cacheSummary=`${compact(usage.cacheReadTokens)} read · ${compact(usage.cacheWriteTokens)} write`;
+    } else if(raw.usage_state==='unknown') {
+      usage.usageObserved=false;usage.tokens='—';usage.tokenSummary='—';usage.cacheSummary='—';
+    }
     return {
+      sessionId:raw.session_id || null,callerIdentityId:raw.caller_identity_id || '',clientKind:raw.client_kind || '',contentPreview:raw.content_preview || {content_state:'legacy_unavailable'},observation:raw.observation || null,
       id:raw.id, time:timeLabel(raw.timestamp), timestamp:raw.timestamp,
       model:raw.logical_model_id || raw.upstream_model || '—', logicalModel:raw.logical_model_id || '—',
       upstreamModel:raw.upstream_model || '—', responseModel:raw.response_model || '', serviceTier:raw.service_tier || '', responseServiceTier:raw.response_service_tier || '', conversation:raw.conversation_id || '—',
@@ -1772,8 +1805,18 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     return 'normal';
   }
 
-  async getRequest(id) {
-    const body = await this.request(`/api/requests/${encodeURIComponent(id)}`);
+  async getSessions(filters={},options={}) { return this.request(`/api/sessions?${observationQuery(filters)}`,options); }
+  async getSession(id,filters={},options={}) { return this.request(`/api/sessions/${encodeURIComponent(id)}?${observationQuery(filters)}`,options); }
+  async getSessionRequests(id,filters={},options={}) {
+    const body=await this.request(`/api/sessions/${encodeURIComponent(id)}/requests?${observationQuery(filters)}`,options);
+    const items=(body.requests||[]).map(raw=>this.mapRequest(raw));items.total=Number(body.total||0);items.asOf=body.as_of;items.scope=body.scope;return items;
+  }
+  async getProviderTraffic(id='',filters={},options={}) {
+    const path=id?`/api/providers/${encodeURIComponent(id)}/traffic`:'/api/provider-traffic';
+    return this.request(`${path}?${observationQuery(filters)}`,options);
+  }
+  async getRequest(id,options={}) {
+    const body = await this.request(`/api/requests/${encodeURIComponent(id)}`,options);
     const request = this.mapRequest(body.client_request || {});
     const attempts = body.attempts || [];
     const events = [...(body.execution_trace_events || [])].sort((left, right) => {
@@ -1832,6 +1875,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     ];
     return {
       ...request, trace:trace.length ? trace : fallbackTrace, attempts:attempts.length,
+      routeSnapshot:body.route_snapshot || null,decisionUpdates:body.decision_updates || [],executionEvents:body.execution_trace_events || [],traceRevision:body.trace_revision || 0,eventsTruncated:Number(body.events_truncated||0),asOf:body.as_of,
       routePath:attempts.map(attempt => ({
         provider:attempt.provider_id, status:words(attempt.status),
         rateCardVersion:attempt.rate_card_version,planKind:attempt.plan_kind,estimatedCashCost:attempt.estimated_cash_cost,allocatedSubCost:attempt.allocated_sub_cost,

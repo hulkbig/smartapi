@@ -36,6 +36,7 @@
 | [协议行为](protocol-fidelity.md) | 哪些字段原样保留，哪些可以转换，哪些会被拒绝？ |
 | [渠道适配边界](provider-adapters.md) | 如何新增内置渠道，认证、协议和厂商规则分别由谁负责？ |
 | [Fast 与服务等级证据](service-tier-evidence.md) | 请求了什么档位，上游回显了什么，能据此判断什么？ |
+| [Sessions 与请求解释](session-observability.md) | 如何按任务查看请求、输入输出前缀、完整候选与 Provider 流量来源？ |
 | [原生驱动](reference/native/README.md) | 各渠道怎样登录、刷新，当前有什么限制？ |
 | [管理 API](../skills/smartapi/references/management-api.md) | 自动化如何读取资源、准备草稿和应用变更？ |
 

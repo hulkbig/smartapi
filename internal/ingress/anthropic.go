@@ -523,8 +523,10 @@ func (h *AnthropicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeResponseWarnings(w, res)
 	if writeNativeResponse(w, res, domain.ProtocolAnthropic) {
+		captureCanonicalExcerpt(w, res.Response.Content)
 		return
 	}
+	defer func() { captureCanonicalExcerpt(w, res.Response.Content) }()
 	writeJSON(w, http.StatusOK, anResponse{
 		ID: res.RequestID, Type: "message", Role: "assistant",
 		Model:      res.Model,

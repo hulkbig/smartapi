@@ -19,7 +19,7 @@ async function runConnectionTest(providerId,connectionId){
 async function refreshApiKeysInBackground(){try{state.apiKeys=await adapter.getApiKeys();render()}catch(error){showToast(`API key list refresh failed: ${error.message}`,'error')}}
 async function revealManagedApiKey(id,{copy=false}={}){try{const result=await adapter.revealApiKey(id);if(copy){await copyText(result.key);showToast('API key copied');return;}const item=state.apiKeys.find(key=>key.id===id);state.modal={type:'key-reveal',key:result.key,name:result.name||item?.name||id,existing:true};renderPortal()}catch(error){showToast(error.message,'error')}}
 let requestAutoTimer;
-function configureRequestAutoRefresh(){clearInterval(requestAutoTimer);if(state.requestAutoRefresh)requestAutoTimer=setInterval(()=>{if(state.auth?.authenticated&&currentRoute().section==='requests'&&!state.requestLoading&&!state.requestExporting&&!document.activeElement?.matches('input,select,textarea')){const id=currentRoute().id;if(id)loadAndRenderRequest(id);else reloadRequests()}},3000)}
+function configureRequestAutoRefresh(){clearInterval(requestAutoTimer);if(state.requestAutoRefresh)requestAutoTimer=setInterval(()=>{if(state.auth?.authenticated&&!document.hidden&&currentRoute().section==='requests'&&!state.requestLoading&&!state.requestExporting&&!document.activeElement?.matches('input,select,textarea')){const id=currentRoute().id;if(id)loadAndRenderRequest(id);else reloadRequests()}},3000)}
 function csvCell(value){const text=String(value??''),safe=typeof value==='string'&&/^\s*[=+\-@]/u.test(text)?`'${text}`:text;return `"${safe.replaceAll('"','""')}"`}
 function requestExportRow(item){
   const raw=item.raw||item,usage=raw.usage||{};
@@ -35,7 +35,7 @@ async function exportRequests(format){
     do{const page=await adapter.getRequests({...filters,limit:1000,offset}),pageTotal=Number(page.total??page.length);if(!Number.isSafeInteger(pageTotal)||pageTotal<0)throw new Error('The request ledger returned an invalid total. Retry the export.');if(reportedTotal===null)reportedTotal=pageTotal;else if(pageTotal!==reportedTotal)throw new Error('The request ledger changed during export. Retry to capture one complete result set.');for(const item of page){const id=item.raw?.id??item.id;if(!id)throw new Error('A request has no stable ID. Retry the export.');if(seenIDs.has(id))throw new Error('The request ledger changed during export and repeated a request. Retry to capture one complete result set.');seenIDs.add(id);rows.push(item)}offset+=page.length;if(!page.length)break;}while(offset<reportedTotal);
     if(rows.length!==reportedTotal)throw new Error(`The request ledger changed during export (${rows.length} of ${reportedTotal} rows collected). Retry to capture one complete result set.`);
     const exact=rows.map(item=>item.raw?JSON.parse(JSON.stringify(item.raw)):requestExportRow(item));
-    if(format==='csv')exportRows(rows,'csv','ferry-requests');else exportRows({schema_version:1,exported_at:new Date().toISOString(),filters:{...filters,limit:undefined,offset:undefined},reported_total:reportedTotal??0,exported_count:exact.length,requests:exact},'json','ferry-requests');
+    if(format==='csv')exportRows(rows,'csv','smartapi-requests');else exportRows({schema_version:1,exported_at:new Date().toISOString(),filters:{...filters,limit:undefined,offset:undefined},reported_total:reportedTotal??0,exported_count:exact.length,requests:exact},'json','smartapi-requests');
     showToast(`Exported ${exact.length} matching request${exact.length===1?'':'s'}`);
   }catch(error){showToast(`Request export failed: ${error.message}`,'error')}
   finally{state.requestExporting=false;render()}
@@ -156,7 +156,7 @@ app.addEventListener('click', async (event) => {
   if(action==='request-clear'){clearReportFilters();Object.assign(state,{requestSearch:'',requestConversation:'',requestFilter:'all',requestModel:'',requestProvider:'',requestApiKey:'',requestConnection:'',requestFailureType:'',requestStatus:'',requestRevision:'',requestFrom:'',requestTo:'',requestOffset:0});await reloadRequests();return;}
   if(action==='request-auto'){state.requestAutoRefresh=el.checked;configureRequestAutoRefresh();render();return;}
   if(action==='request-export'){await exportRequests(el.dataset.format==='csv'?'csv':'json');return;}
-  if(action==='billing-export'){if(!state.billing.reconciliation){showToast('Reconciliation export requires recorded API usage','error');return;}exportRows(state.billing.reconciliation, 'json','ferry-usage-reconciliation');return;}
+  if(action==='billing-export'){if(!state.billing.reconciliation){showToast('Reconciliation export requires recorded API usage','error');return;}exportRows(state.billing.reconciliation, 'json','smartapi-usage-reconciliation');return;}
   if(action==='billing-tab'){location.hash='#/billing';return;}
   if(action==='insights-toggle'){state.insightsOpen=!state.insightsOpen;render();return;}
   if(action==='insights-link'){state.insightsOpen=false;render();return;}

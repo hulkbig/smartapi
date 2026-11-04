@@ -1,0 +1,296 @@
+
+// Session, Provider-source and Request views share one observation controller.
+const observationContexts=new Map();
+let activeObservationContext=null;
+let observationSearchTimer=null;
+
+function observationContext(type,id=''){
+  const key=`${type}:${id}`;
+  const hash=new URLSearchParams(location.hash.split('?')[1]||'');
+  const entryQuery=hash.toString();
+  const previous=observationContexts.get(key);
+  if(previous&&previous.entryQuery===entryQuery)return previous;
+  const filters={window:'24h',q:'',caller_id:'',logical_model:'',participating_provider:'',status:'',outcome:''};
+  for(const name of ['window','q','caller_id','logical_model','participating_provider','status','outcome','from','to','scope'])if(hash.has(name))filters[name]=hash.get(name);
+  if(filters.scope==='all')delete filters.window;
+  if(previous){
+    previous.entryQuery=entryQuery;previous.filters=filters;previous.resource.cancel();previous.resource.data=null;previous.resource.error=null;
+    resetObservationQuery(previous);return previous;
+  }
+  const ctx={key,type,id,entryQuery,filters,mode:'session',cursor:'',cursorStack:[],offset:0,sourceId:'',requestId:'',graph:null};
+  ctx.resource=new ObservationResource((event,resource)=>{
+    if(event==='success'){
+      ctx.sourceId=resource.data.sourceId||'';ctx.requestId=resource.data.requestId||'';
+      if(resource.data.detail?.id)state.requestCache.set(resource.data.detail.id,resource.data.detail);
+    }
+    if(activeObservationContext===ctx)renderObservationPreservingFocus();
+  });
+  observationContexts.set(key,ctx);
+  if(observationContexts.size>16){for(const [oldKey,old]of observationContexts){if(old!==activeObservationContext&&old!==ctx){old.resource.cancel();old.graph?.destroy();observationContexts.delete(oldKey);break}}}
+  return ctx;
+}
+
+function renderObservationPreservingFocus(){
+  const focused=document.activeElement,field=focused?.dataset?.observeField;
+  const selection=field==='q'?[focused.selectionStart,focused.selectionEnd]:null;
+  render();
+  if(!field)return;
+  const next=app.querySelector(`[data-observe-field="${field}"]`);
+  next?.focus({preventScroll:true});if(selection&&next?.setSelectionRange)next.setSelectionRange(...selection);
+}
+
+function observationFilters(ctx,{timeline=false}={}){
+  const filters={...ctx.filters};
+  if(filters.scope==='all'){delete filters.window;delete filters.from;delete filters.to;}
+  if(ctx.type==='provider'&&ctx.id)filters.participating_provider=ctx.id;
+  if(!timeline){filters.limit=ctx.type==='provider'?4:25;if(ctx.cursor)filters.cursor=ctx.cursor;if(ctx.type==='provider')filters.mode=ctx.mode;}
+  return filters;
+}
+
+function observationSessionHref(id,ctx=activeObservationContext){
+  const filters=ctx?{...ctx.filters}:{};
+  const scope=ctx?.resource.data?.page?.scope;
+  if(filters.scope!=='all'&&scope?.from&&scope?.to){filters.from=scope.from;filters.to=scope.to;delete filters.window;}
+  if(ctx?.type==='provider'&&ctx.id)filters.participating_provider=ctx.id;
+  const query=observabilityModel.observationQuery(filters);
+  return `#/sessions/${encodeURIComponent(id)}${query?'?'+query:''}`;
+}
+
+function observationRequestHref(id,ctx=activeObservationContext){
+  return observationSessionHref(id,ctx).replace('#/sessions/','#/requests/');
+}
+
+function observationPreview(preview={},extra=''){
+  const p={content_state:'legacy_unavailable',...preview},text=p.preview_text||observabilityModel.previewPlaceholder(p,consoleLocale);
+  return `<div class="observation-preview ${extra}"><b>${esc(observabilityModel.previewLabel(p,consoleLocale))}</b><span data-i18n-skip class="${p.preview_text?'':'preview-muted'}" title="${esc(text)}">${esc(text)}</span></div>`;
+}
+
+function requestObservationPrefix(request){return observationPreview(observabilityModel.previewOf(request),'request-entry-preview');}
+
+function observationMoney(value,state='known'){
+  if(value==null||state==='unknown')return '—';
+  return `${state==='partial'?'≈ ':''}${new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:4}).format(Number(value))}`;
+}
+
+function observationStatus(raw){
+  return ({received:nt('Received','已接收'),waiting:nt('Waiting','等待中'),active:nt('Calling','调用中'),recovering:nt('Recovering','恢复中'),streaming:nt('Streaming','流式输出'),delivering:nt('Delivering','交付中'),success:nt('Success','成功'),failed:nt('Failed','失败'),canceled:nt('Canceled','已取消')})[raw]||raw||'—';
+}
+
+function observationStats(stats={}){
+  const values=[
+    ['Sessions',stats.sessions,`${stats.independent_requests??0} ${nt('independent requests','条独立请求')} · ${stats.association_coverage==null?'—':Math.round(stats.association_coverage*100)+'%'} ${nt('linked','已关联')}`],
+    [nt('Active Sessions','活跃 Sessions'),stats.active_sessions,nt('Unfinished requests in scope','范围内仍有请求进行中')],
+    [nt('Sessions with failures','含失败的 Sessions'),stats.failed_sessions,nt('Canceled requests shown separately','取消请求单独统计')],
+    [nt('Recovered Sessions','恢复成功的 Sessions'),stats.recovered_sessions,nt('At least one recovered request','至少一条请求恢复成功')],
+    [nt('Requests / Session','平均请求数'),stats.average_requests_per_session==null?null:Number(stats.average_requests_per_session).toFixed(1),nt('Associated requests only','仅统计已关联请求')],
+    [nt('Known request cost','已知请求成本'),observationMoney(stats.known_cost,stats.cost_state),`${stats.cost_known_requests??0}/${stats.requests??0} ${nt('fully observed','条完整记录')}`],
+  ];
+  return `<div class="observability-stats">${values.map(([label,value,sub])=>`<div class="observability-stat"><span>${esc(label)}</span><strong>${esc(value??'—')}</strong><small>${esc(sub)}</small></div>`).join('')}</div>`;
+}
+
+function observationScope(ctx){
+  const data=ctx.resource.data,page=data?.page,updated=page?.as_of;
+  const scope=page?.scope||{},all=ctx.filters.scope==='all';
+  const range=all?nt('All retained requests','保留期内全部请求'):scope.from&&scope.to?`${consoleDateTime(scope.from)} → ${consoleDateTime(scope.to)}`:nt('Selected time window','所选时间范围');
+  return `<div class="observability-scope"><span>${esc(range)}</span>${updated?`<span>${nt('Updated','更新于')} ${esc(consoleDateTime(updated,true))}</span>`:''}${ctx.resource.loading?`<span>${nt('Updating…','更新中…')}</span>`:''}${ctx.resource.error?`<span role="alert">${nt('Last data retained ·','已保留上次数据 ·')} ${esc(ctx.resource.error.message)}</span>`:''}</div>`;
+}
+
+function observationToolbar(ctx){
+  const f=ctx.filters,exact=Boolean(f.from&&f.to)||f.scope==='all';
+  return `<div class="observability-toolbar"><input class="input" data-observe-field="q" value="${esc(f.q||'')}" placeholder="${esc(nt('Search Session, Request or content…','搜索 Session、Request 或内容…'))}" aria-label="${esc(nt('Search observations','搜索会话和请求'))}"><select class="select" data-observe-field="window" aria-label="${esc(nt('Time window','时间范围'))}">${exact?`<option value="exact" selected disabled>${f.scope==='all'?nt('All retained','全部保留记录'):nt('Exact time range','精确时间范围')}</option>`:''}${[['15m',nt('15 minutes','15 分钟')],['1h',nt('1 hour','1 小时')],['24h',nt('24 hours','24 小时')],['168h',nt('7 days','7 天')],['720h',nt('30 days','30 天')]].map(([value,label])=>`<option value="${value}" ${!exact&&f.window===value?'selected':''}>${label}</option>`).join('')}</select>
+    <select class="select" data-observe-field="caller_id" aria-label="${esc(nt('Caller','调用方'))}"><option value="">${nt('All callers','全部调用方')}</option>${state.apiKeys.map(key=>`<option value="${esc(key.id)}" ${f.caller_id===key.id?'selected':''}>${esc(key.name)}</option>`).join('')}</select>
+    <select class="select" data-observe-field="logical_model" aria-label="${esc(nt('Logical model','逻辑模型'))}"><option value="">${nt('All models','全部模型')}</option>${state.models.map(model=>`<option value="${esc(model.id)}" ${f.logical_model===model.id?'selected':''}>${esc(model.name||model.id)}</option>`).join('')}</select>
+    ${ctx.type==='provider'&&ctx.id?'':`<select class="select" data-observe-field="participating_provider" aria-label="${esc(nt('Participating Provider','参与的 Provider'))}"><option value="">${nt('All Providers','全部 Provider')}</option>${state.providers.map(provider=>`<option value="${esc(provider.id)}" ${f.participating_provider===provider.id?'selected':''}>${esc(provider.name)}</option>`).join('')}</select>`}
+    <select class="select" data-observe-field="status" aria-label="${esc(nt('Request status','请求状态'))}"><option value="">${nt('All states','全部状态')}</option>${['waiting','active','recovering','streaming','success','failed','canceled'].map(value=>`<option value="${value}" ${f.status===value?'selected':''}>${esc(observationStatus(value))}</option>`).join('')}</select>
+    <button class="btn small" data-observe="clear">${nt('Clear filters','清除筛选')}</button><button class="btn small" data-observe="refresh">${icon('refresh')} ${nt('Refresh','刷新')}</button></div>`;
+}
+
+function observationEnsureLoad(ctx){if(!ctx.resource.data&&!ctx.resource.loading&&!ctx.resource.error)queueMicrotask(()=>loadObservationContext(ctx));}
+
+function observationEmpty(ctx,message){
+  if(ctx.resource.loading&&!ctx.resource.data)return `<div class="observation-empty">${nt('Loading observations…','正在读取会话和请求…')}</div>`;
+  return `<div class="observation-empty ${ctx.resource.error?'observation-error':''}"><strong>${esc(ctx.resource.error?nt('Observations unavailable','会话记录暂不可用'):message)}</strong><span>${esc(ctx.resource.error?.message||nt('Adjust the time range or filters. Requests without reliable Session evidence remain independent.','可调整时间范围或筛选；缺少可靠会话线索的请求保留为独立请求。'))}</span></div>`;
+}
+
+function observationPagination(ctx,{timeline=false}={}){
+  const data=ctx.resource.data,page=data?.page,total=timeline?Number(data?.requests?.total||0):Number(page?.total||0);
+  const previous=timeline?ctx.offset>0:ctx.cursorStack.length>0,next=timeline?ctx.offset+(data?.requests?.length||0)<total:Boolean(page?.next_cursor);
+  return `<div class="observability-pagination"><span>${esc(total)} ${nt(timeline?'matching requests':ctx.type==='provider'?'matching sources':'matching Sessions',timeline?'条匹配请求':ctx.type==='provider'?'个匹配来源':'个匹配 Sessions')}</span><div><button class="btn small" data-observe="${timeline?'timeline-prev':'previous'}" ${!previous||ctx.resource.loading?'disabled':''}>${nt('Previous','上一页')}</button><button class="btn small" data-observe="${timeline?'timeline-next':'next'}" ${!next||ctx.resource.loading?'disabled':''}>${nt('Next','下一页')}</button></div></div>`;
+}
+
+function observationFocus(ctx){
+  const data=ctx.resource.data;if(!data)return '';
+  const source=data.sources.find(s=>s.source_id===data.sourceId),detail=data.detail;
+  return `<section class="observability-section observation-focus-panel"><div class="section-head"><div><h2>${nt('Session flow','Session 流转')}</h2><p data-i18n-skip>${esc(source?.title||'')}</p></div><div class="row-actions">${source?.session_id?`<a class="btn small" href="${esc(observationSessionHref(source.session_id,ctx))}">${nt('Session details','Session 详情')} ↗</a>`:''}${data.requestId?`<a class="btn small" href="${esc(observationRequestHref(data.requestId,ctx))}">${nt('Full Request','完整 Request')} ↗</a>`:''}</div></div>
+    ${observationRequestPicker(ctx)}${detail?`<div data-observation-graph="${esc(ctx.key)}"></div>`:observationEmpty(ctx,nt('No request selected','暂无选中的请求'))}</section>`;
+}
+
+function pageSessions(id){
+  const ctx=observationContext(id?'session':'sessions',id||'');observationEnsureLoad(ctx);
+  const data=ctx.resource.data;
+  if(id)return pageSessionDetail(ctx);
+  const rows=data?.page?.sessions||[];
+  return `<div class="observability-page"><div class="page-head"><div class="head-main"><h1>Sessions</h1><p>${nt('Follow a continuous task across its requests, models and Providers.','按持续任务组织请求，查看跨模型与 Provider 的执行过程。')}</p></div><a class="btn" href="#/requests">${nt('Requests','请求列表')} ↗</a></div>${observationToolbar(ctx)}${observationScope(ctx)}${observationStats(data?.page?.stats)}
+    ${rows.length?`<section class="card table-wrap"><table class="session-table"><thead><tr><th>Session · Request / Response</th><th>${nt('Caller / state','调用方 / 状态')}</th><th>${nt('Requests / models','请求 / 模型')}</th><th>${nt('Usage / cost','用量 / 成本')}</th><th>${nt('Last activity','最近活动')}</th></tr></thead><tbody>${rows.map(row=>`<tr class="${ctx.sourceId===row.source_id?'selected':''}"><td><a class="session-title" data-i18n-skip href="${esc(observationSessionHref(row.session_id,ctx))}">${esc(row.title||row.session_id)}</a>${observationPreview(row.content_preview)}<div class="observation-identifiers" data-i18n-skip>${esc(row.session_id)} <button class="btn small" data-observe="source" data-source="${esc(row.source_id)}">${nt('Flow','流转')}</button></div></td><td><strong data-i18n-skip>${esc(row.caller||row.caller_identity_id||'—')}</strong><small data-i18n-skip>${esc(row.client_kind||'api')}</small><div class="observation-tags">${row.active_requests?badge(observationStatus(row.selected_request_status)):''}${row.failed?badge(nt('Failed','失败')):''}${row.recovered?badge(nt('Recovered','已恢复')):''}${!row.active_requests&&!row.failed&&!row.recovered?badge(observationStatus(row.selected_request_status)):''}</div></td><td><strong class="session-number">${row.request_count}</strong><small>${row.logical_models?.length||0} ${nt('models','个模型')} · ${row.provider_ids?.length||0} Providers</small></td><td><strong>${row.usage_state==='unknown'?'—':fmtCompact(Number(row.usage?.input_tokens||0)+Number(row.usage?.output_tokens||0))} tokens</strong><small>${esc(observationMoney(row.known_cost,row.cost_state))}${row.cost_state==='partial'?' · '+nt('Partial','部分已知'):''}</small></td><td><small>${esc(consoleDateTime(row.last_at,true))}</small><a href="${esc(observationRequestHref(row.selected_request_id,ctx))}">Request ↗</a></td></tr>`).join('')}</tbody></table></section>${observationPagination(ctx)}${observationFocus(ctx)}`:observationEmpty(ctx,nt('No matching Sessions','没有匹配的 Sessions'))}</div>`;
+}
+
+function pageSessionDetail(ctx){
+  const data=ctx.resource.data,page=data?.page,session=page?.session;
+  const requests=data?.requests||[];
+  return `<div class="observability-page"><div class="page-head"><div class="head-main"><div class="head-line"><a class="btn icon" href="#/sessions">←</a><h1>Session</h1></div><p data-i18n-skip>${esc(session?.title||ctx.id)}</p><small class="mono" data-i18n-skip>${esc(ctx.id)}</small></div><button class="btn" data-observe="all-retained">${nt('All retained requests','查看保留期内全部请求')}</button></div>
+    ${observationToolbar(ctx)}${observationScope(ctx)}${observationStats(page?.stats)}
+    ${page?`${observationSessionMetrics(page)}${observationFocus(ctx)}
+    <section class="card panel"><div class="section-head"><h2>${nt('Request timeline','请求时间线')}</h2><span class="cell-sub">${requests.total??requests.length} ${nt('requests in scope','条范围内请求')}</span></div><div class="observation-request-list">${requests.map(request=>`<article class="observation-request ${ctx.requestId===request.id?'selected':''}"><button class="observation-request-main" data-observe="request" data-request="${esc(request.id)}"><strong class="mono" data-i18n-skip>${esc(request.id)}</strong>${observationPreview(observabilityModel.previewOf(request))}<small class="cell-sub" data-i18n-skip>${esc(request.model)} · ${esc(request.providerId||request.route||'—')} · ${esc(consoleDateTime(request.timestamp,true))}</small></button><div class="observation-request-side">${badge(request.live?request.result:request.canceled?nt('Canceled','已取消'):request.failed?nt('Failed','失败'):request.recovered?nt('Recovered','已恢复'):nt('Success','成功'))}<a href="${esc(observationRequestHref(request.id,ctx))}">${nt('Full details','完整详情')} ↗</a></div></article>`).join('')||observationEmpty(ctx,nt('No requests in this range','此范围内没有请求'))}</div></section>${observationPagination(ctx,{timeline:true})}`:observationEmpty(ctx,nt('Session unavailable','Session 暂不可用'))}</div>`;
+}
+
+function observationSessionMetrics(page){
+  const s=page.stats||{},m=page.metrics||{},timing=page.timing||{},usage=s.usage||{};
+  const token=key=>s.usage_state==='unknown'?'—':`${s.usage_state==='partial'?'≈ ':''}${fmtCompact(usage[key]??0)}`;
+  const cells=[
+    [nt('Caller','调用方'),page.session?.caller||page.session?.caller_identity_id||'—'],
+    [nt('Total / success / failed / canceled','总数 / 成功 / 失败 / 取消'),`${s.requests??0} / ${s.succeeded??0} / ${s.failed??0} / ${s.canceled??0}`],
+    [nt('Success rate · terminal only','成功率 · 仅成功与失败终态'),s.success_rate==null?'—':`${(s.success_rate*100).toFixed(1)}%`],
+    [nt('Input / output tokens','输入 / 输出 Token'),`${token('input_tokens')} / ${token('output_tokens')}`],
+    [nt('Cache read / write tokens','缓存读取 / 写入 Token'),`${token('cache_read_tokens')} / ${token('cache_write_tokens')}`],
+    [nt('Participating Providers / connections','参与 Provider / 连接'),`${m.provider_ids?.length??0} / ${m.connection_ids?.length??0}`],
+    [nt('Recovery transitions / added time','恢复次数 / 额外耗时'),`${m.recovery_count??0} / ${observationTiming(m.recovery_added_latency_ms)}`],
+    ['TTFT p50 / p95',`${observationTiming(timing.ttft_p50_ms)} / ${observationTiming(timing.ttft_p95_ms)} · n=${timing.ttft_samples??0}`],
+    [nt('Duration p50 / p95','耗时 p50 / p95'),`${observationTiming(timing.duration_p50_ms)} / ${observationTiming(timing.duration_p95_ms)} · n=${timing.duration_samples??0}`],
+  ];
+  return `<div class="observation-summary-strip">${cells.map(([label,value])=>`<span><small>${esc(label)}</small><strong data-i18n-skip>${esc(value)}</strong></span>`).join('')}</div>`;
+}
+
+function observationTiming(value){return value==null?'—':value>=1000?`${(value/1000).toFixed(2)}s`:`${value}ms`;}
+
+function observationRequestPicker(ctx){
+  const data=ctx.resource.data;if(!data?.requestId)return '';
+  const entries=[...(data.requests||[])];
+  if(!entries.some(r=>r.id===data.requestId)&&data.detail)entries.unshift(data.detail);
+  return `<div class="observation-traffic-selector"><label>${nt('Selected Request','当前 Request')}</label><select class="select" data-observe-field="request" aria-label="${esc(nt('Selected Request','当前 Request'))}">${entries.map(request=>`<option value="${esc(request.id)}" ${request.id===data.requestId?'selected':''}>${esc(request.id)} · ${esc(request.result||request.raw?.status||'')}</option>`).join('')}</select><span class="cell-sub">${nt('Only this request drives the highlighted path.','高亮路径仅解释当前选中的请求。')}</span></div>`;
+}
+
+function renderObservationTraffic(providerId=''){
+  const ctx=observationContext('provider',providerId);observationEnsureLoad(ctx);
+  const data=ctx.resource.data,sources=data?.sources||[];
+  return `<section class="observability-section" data-observation-provider="${esc(providerId)}"><div class="observability-head"><div><h2>${nt('Traffic sources','流量来源')}</h2><p class="cell-sub">${nt(providerId?'Requests that used this Provider, plus separately marked waiting sources.':'Select a Session or Request to follow its actual route.',providerId?'展示参与此 Provider 的请求，等待发送的来源单独标记。':'选择一个 Session 或 Request，查看它的实际流转。')}</p></div><div class="observation-view-toggle"><button data-observe="mode" data-mode="session" class="${ctx.mode==='session'?'active':''}">Sessions</button><button data-observe="mode" data-mode="request" class="${ctx.mode==='request'?'active':''}">Requests</button></div></div>
+    ${observationToolbar(ctx)}${observationScope(ctx)}${data?`<div class="observation-summary-strip"><span><small>${nt('Sources','来源')}</small><strong>${data.page.total}</strong></span><span><small>${nt('Participating requests','参与请求')}</small><strong>${data.page.stats?.participating_requests??0}</strong></span><span><small>${nt('Waiting to send','待发送')}</small><strong>${data.page.stats?.pending_requests??0}</strong></span><span><small>${nt('Participating request cost','参与请求总成本')}</small><strong>${esc(observationMoney(data.page.stats?.known_cost,data.page.stats?.cost_state))}</strong></span></div>`:''}
+    ${sources.length?`${observationRequestPicker(ctx)}${data.detail?`<div data-observation-graph="${esc(ctx.key)}"></div>`:observationEmpty(ctx,nt('Request details unavailable','请求详情暂不可用'))}${observationPagination(ctx)}`:observationEmpty(ctx,nt('No matching traffic sources','没有匹配的流量来源'))}</section>`;
+}
+
+async function loadObservationContext(ctx,{replace=false}={}){
+  if(ctx.type==='request')return;
+  const filters=observationFilters(ctx),intent={sourceId:ctx.sourceId,requestId:ctx.requestId,offset:ctx.offset};
+  return ctx.resource.load(async signal=>{
+    const options={signal};let page,sources,requests=[];
+    if(ctx.type==='session'){
+      page=await adapter.getSession(ctx.id,filters,options);sources=page.session?.request_count?[page.session]:[];
+    }else if(ctx.type==='sessions'){
+      page=await adapter.getSessions(filters,options);sources=page.sessions||[];
+    }else{
+      page=await adapter.getProviderTraffic(ctx.id,filters,options);sources=page.sources||[];
+    }
+    let selected=sources.find(s=>s.source_id===intent.sourceId)||sources.find(s=>observabilityModel.sourceRequestId(s)===intent.requestId)||sources[0];
+    if(!selected)return {page,sources,requests,detail:null,sourceId:'',requestId:''};
+    let requestId=observabilityModel.sourceRequestId(selected);
+    const timelineFilters=observationFilters(ctx,{timeline:true});
+    if(page.scope?.from&&page.scope?.to&&timelineFilters.scope!=='all'){timelineFilters.from=page.scope.from;timelineFilters.to=page.scope.to;delete timelineFilters.window;}
+    if(selected.session_id){
+      requests=await adapter.getSessionRequests(selected.session_id,{...timelineFilters,limit:ctx.type==='session'?25:50,offset:ctx.type==='session'?intent.offset:0},options);
+      if(intent.requestId&&requests.some(r=>r.id===intent.requestId))requestId=intent.requestId;
+    }else if(selected.selected_request){requests=[{id:requestId,raw:selected.selected_request,result:observationStatus(selected.selected_request.status)}];requests.total=1;}
+    const detail=requestId?await adapter.getRequest(requestId,options):null;
+    return {page,sources,requests,detail,sourceId:selected.source_id,requestId};
+  },{replace});
+}
+
+function observationAttachGraph(ctx,slot,detail,options){
+  if(!slot||!detail)return;
+  if(ctx.graph){if(slot!==ctx.graph.container)slot.replaceWith(ctx.graph.container);ctx.graph.update(detail,options);ctx.graph.relayout();}
+  else ctx.graph=mountRouteExplanation(slot,detail,options);
+}
+
+function decorateObservedRequest(route){
+  const request=requestDataSync(route.id),summary=app.querySelector('.request-model-summary');if(!request||!summary)return null;
+  const ctx=observationContext('request',route.id);
+  const section=document.createElement('section');section.className='observability-section';
+  const p=observabilityModel.previewOf(request),session=request.sessionId||request.raw?.session_id;
+  if(!ctx.requestScope){if(!ctx.entryQuery){const f=requestFilters();ctx.filters={window:f.window||'24h',q:'',logical_model:f.logical_model||'',participating_provider:f.participating_provider||'',status:f.status||'',outcome:f.outcome||''};if(f.from&&f.to){ctx.filters.from=f.from;ctx.filters.to=f.to;delete ctx.filters.window;}}ctx.requestScope=true;}
+  const responsePlaceholder=observabilityModel.liveRequestStatuses.has(request.raw?.status)?nt('Waiting for response','等待响应'):['disabled','legacy_unavailable','unsupported'].includes(p.content_state)?observabilityModel.previewPlaceholder(p,consoleLocale):nt('No visible response excerpt','没有可见响应前缀');
+  section.innerHTML=`<div class="observation-heading-actions"><div class="observation-summary-strip"><span><small>Request</small><strong data-i18n-skip>${esc(p.request_excerpt||observabilityModel.previewPlaceholder(p,consoleLocale))}</strong></span><span><small>Response</small><strong data-i18n-skip>${esc(p.response_excerpt||responsePlaceholder)}</strong></span></div>${session?`<a class="btn small" href="${esc(observationSessionHref(session,ctx))}">Session ↗</a>`:''}</div><div data-observation-graph="${esc(ctx.key)}"></div>`;
+  summary.after(section);
+  return {ctx,detail:request};
+}
+
+function syncObservabilityView(route){
+  let ctx=null,detail=null;
+  if(route.section==='sessions')ctx=observationContext(route.id?'session':'sessions',route.id||'');
+  else if(route.section==='providers'&&app.querySelector('[data-observation-provider]'))ctx=observationContext('provider',route.id||'');
+  else if(route.section==='requests'&&route.id){const entry=decorateObservedRequest(route);if(entry){ctx=entry.ctx;detail=entry.detail}}
+  if(activeObservationContext!==ctx){
+    activeObservationContext?.resource.cancel();activeObservationContext?.graph?.destroy();if(activeObservationContext)activeObservationContext.graph=null;
+    activeObservationContext=ctx;
+  }
+  if(!ctx)return;
+  if(ctx.type!=='request')detail=ctx.resource.data?.detail;
+  const slot=app.querySelector('[data-observation-graph]');
+  if(!slot||!detail){ctx.graph?.destroy();ctx.graph=null;return;}
+  const data=ctx.resource.data,source=data?.sources.find(s=>s.source_id===data.sourceId);
+  const options={locale:consoleLocale,mode:ctx.type==='request'?'detail':ctx.type==='provider'?'provider':'compact',
+    sources:ctx.type==='provider'?data.sources.map(s=>s.source_id===data.sourceId?observabilityModel.focusedSource(s,detail):s):source?[observabilityModel.focusedSource(source,detail)]:undefined,selectedSourceId:data?.sourceId,
+    sessionHref:id=>observationSessionHref(id,ctx),requestHref:id=>observationRequestHref(id,ctx),onSelectSource:source=>selectObservationSource(ctx,source.source_id)};
+  observationAttachGraph(ctx,slot,detail,options);
+}
+
+function selectObservationSource(ctx,id){
+  const source=ctx.resource.data?.sources.find(s=>s.source_id===id);if(!source)return;
+  ctx.sourceId=id;ctx.requestId=observabilityModel.sourceRequestId(source);ctx.graph?.pause();loadObservationContext(ctx,{replace:true});
+}
+
+function resetObservationQuery(ctx){ctx.cursor='';ctx.cursorStack=[];ctx.offset=0;ctx.sourceId='';ctx.requestId='';ctx.graph?.pause();}
+
+document.addEventListener('click',event=>{
+  const control=event.target.closest('[data-observe]'),ctx=activeObservationContext;if(!control||!ctx||control.disabled)return;
+  const action=control.dataset.observe;
+  if(action==='source'){selectObservationSource(ctx,control.dataset.source);return;}
+  if(action==='request'){ctx.requestId=control.dataset.request;loadObservationContext(ctx,{replace:true});return;}
+  if(action==='mode'){ctx.mode=control.dataset.mode;ctx.cursor='';ctx.cursorStack=[];ctx.graph?.pause();loadObservationContext(ctx,{replace:true});return;}
+  if(action==='next'){ctx.cursorStack.push(ctx.cursor);ctx.cursor=ctx.resource.data?.page.next_cursor||'';ctx.sourceId='';ctx.requestId='';}
+  if(action==='previous'){ctx.cursor=ctx.cursorStack.pop()||'';ctx.sourceId='';ctx.requestId='';}
+  if(action==='timeline-next')ctx.offset+=25;
+  if(action==='timeline-prev')ctx.offset=Math.max(0,ctx.offset-25);
+  if(action==='all-retained'){ctx.filters={...ctx.filters,scope:'all'};delete ctx.filters.window;delete ctx.filters.from;delete ctx.filters.to;resetObservationQuery(ctx);}
+  if(action==='clear'){ctx.filters={window:'24h',q:'',caller_id:'',logical_model:'',participating_provider:'',status:'',outcome:''};resetObservationQuery(ctx);}
+  if(action==='refresh'){ctx.cursor='';ctx.cursorStack=[];ctx.offset=0;}
+  loadObservationContext(ctx,{replace:true});
+});
+
+document.addEventListener('change',async event=>{
+  const control=event.target.closest('[data-observe-field]'),ctx=activeObservationContext;if(!control)return;
+  const field=control.dataset.observeField;
+  if(field==='content-mode'){
+    control.disabled=true;try{state.settings=await adapter.updateSettings({observability_content_mode:control.checked?'excerpt':'metadata_only'});render()}catch(error){showToast(error.message,'error');control.checked=state.settings?.observability_content_mode==='excerpt';control.disabled=false}return;
+  }
+  if(!ctx||field==='q')return;
+  if(field==='request'){ctx.requestId=control.value;loadObservationContext(ctx,{replace:true});return;}
+  ctx.filters[field]=control.value;
+  if(field==='window'){delete ctx.filters.from;delete ctx.filters.to;delete ctx.filters.scope;}
+  resetObservationQuery(ctx);loadObservationContext(ctx,{replace:true});
+});
+
+document.addEventListener('input',event=>{
+  const control=event.target.closest('[data-observe-field="q"]'),ctx=activeObservationContext;if(!control||!ctx)return;
+  ctx.filters.q=control.value;clearTimeout(observationSearchTimer);
+  observationSearchTimer=setTimeout(()=>{if(activeObservationContext!==ctx)return;resetObservationQuery(ctx);loadObservationContext(ctx,{replace:true})},300);
+});
+
+setInterval(()=>{
+  const ctx=activeObservationContext;
+  if(!ctx||ctx.type==='request'||document.hidden||ctx.resource.loading||!state.auth?.authenticated||document.activeElement?.matches('[data-observe-field]'))return;
+  loadObservationContext(ctx);
+},3000);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)activeObservationContext?.resource.cancel();});
+
+function settingsObservationContent(){
+  const enabled=state.settings?.observability_content_mode==='excerpt';
+  return `<section class="card panel observation-content-setting"><div class="section-head"><div><h2>${nt('Request and response excerpts','请求与响应前缀')}</h2><p>${nt('Show meaningful content at the start of Session and Request rows.','在 Session 与 Request 列表前部显示有辨识度的内容。')}</p></div><label class="switch"><input type="checkbox" data-observe-field="content-mode" aria-label="${esc(nt('Record bounded excerpts','记录有限内容前缀'))}" ${enabled?'checked':''}><span></span></label></div><p class="cell-sub">${nt('When enabled, new requests retain up to 160 characters of user text and visible response. System context, reasoning, tool arguments and raw headers are omitted. Excerpts follow request-history retention; turning this off keeps existing excerpts. Full debug capture remains a separate setting.','开启后，新请求最多记录 160 字的用户输入和可见响应，不记录系统上下文、推理、工具参数或原始请求头。前缀随请求历史保留；关闭后保留已记录内容。完整调试留存使用独立开关。')}</p><strong>${enabled?nt('Bounded excerpts enabled','有限前缀已开启'):nt('Metadata only','仅记录元数据')}</strong></section>`;
+}

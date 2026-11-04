@@ -730,6 +730,7 @@ func (r *OpenAIResponses) Invoke(ctx context.Context, rc *domain.RequestContract
 		}
 	}
 	res.Usage = decodeUsage(out.Usage)
+	res.UsageState = usageEvidence(out.Usage)
 	markResponseConversionIssues(res)
 	demoteResponsesAdvisories(res, rc.Origin)
 	return res, nil
@@ -1077,6 +1078,7 @@ func (r *OpenAIResponses) Stream(ctx context.Context, rc *domain.RequestContract
 					sev.NativeConversationID = nativeConversationID(body.Response.Conversation)
 					u := decodeUsage(body.Response.Usage)
 					sev.Usage = &u
+					sev.UsageState = usageEvidence(body.Response.Usage)
 				}
 				ch <- sev
 				return ioEnd
@@ -1107,6 +1109,7 @@ func (r *OpenAIResponses) Stream(ctx context.Context, rc *domain.RequestContract
 					sev.NativeConversationID = nativeConversationID(body.Response.Conversation)
 					u := decodeUsage(body.Response.Usage)
 					sev.Usage = &u
+					sev.UsageState = usageEvidence(body.Response.Usage)
 				}
 				ch <- sev
 				return ioEnd

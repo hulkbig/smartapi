@@ -133,6 +133,12 @@ class SmartAPIClientTest(unittest.TestCase):
         self.assertEqual(Handler.requests[-1]["path"], path)
         self.assertEqual(Handler.requests[-1]["authorization"], "Bearer smt_test_secret")
 
+    def test_observation_read_routes_use_management_credentials(self) -> None:
+        for path in ("/api/sessions", "/api/sessions/test/requests", "/api/provider-traffic", "/api/providers/test/traffic"):
+            result = self.run_client("management", "GET", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(Handler.requests[-1]["authorization"], "Bearer smt_test_secret")
+
     def test_session_only_and_legacy_routes_are_rejected_locally(self) -> None:
         before = len(Handler.requests)
         session_only = self.run_client("management", "GET", "/api/management-tokens")

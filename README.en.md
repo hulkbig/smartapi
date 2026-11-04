@@ -61,6 +61,12 @@ Define model endpoints for your business. Change upstream models, accounts and r
 
 [Configure logical models](docs/guide/logical-models.en.md)
 
+### Understand each request and its Session
+
+Inspect request timelines, recovery, usage and cost by Session. Requests, Sessions and Providers share a routing explanation with all recorded candidates, conditions, the actual connection and playback. Request/Response excerpts are opt-in; metadata-only capture is the default.
+
+[Sessions and request explanations](docs/session-observability.en.md)
+
 ## Extreme Performance
 
 ### Lower memory usage

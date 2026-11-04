@@ -657,6 +657,7 @@ func (o *OpenAIChat) Invoke(ctx context.Context, rc *domain.RequestContract) (*d
 		}
 	}
 	r.Usage = decodeUsage(out.Usage)
+	r.UsageState = usageEvidence(out.Usage)
 	markResponseConversionIssues(r)
 	return r, nil
 }
@@ -701,6 +702,7 @@ func (o *OpenAIChat) Stream(ctx context.Context, rc *domain.RequestContract) (<-
 		choiceSeen := false
 		var responseModel, responseTier string
 		var lastUsage *domain.Usage
+		lastUsageState := "unknown"
 		nativePass := rc.Origin == domain.ProtocolOpenAIChat && len(rc.Native) > 0
 		finishTools := func() *domain.Failure {
 			if len(activeOrder) == 0 && (finish == "tool_calls" || finish == "function_call") {
@@ -748,7 +750,7 @@ func (o *OpenAIChat) Stream(ctx context.Context, rc *domain.RequestContract) (<-
 					ch <- nativeStreamEvent(domain.ProtocolOpenAIChat, ev, true)
 				}
 				if !ended {
-					ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: mapFinish(finish), Model: responseModel, ServiceTier: responseTier, Usage: lastUsage}
+					ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: mapFinish(finish), Model: responseModel, ServiceTier: responseTier, Usage: lastUsage, UsageState: lastUsageState}
 					ended = true
 				}
 				return ioEnd
@@ -942,6 +944,7 @@ func (o *OpenAIChat) Stream(ctx context.Context, rc *domain.RequestContract) (<-
 			if chunk.Usage != nil {
 				u := decodeUsage(*chunk.Usage)
 				lastUsage = &u
+				lastUsageState = usageEvidence(*chunk.Usage)
 				if !nativePass && !ended {
 					if finish == "" {
 						ch <- domain.StreamEvent{Kind: domain.EvError, Err: &domain.Failure{
@@ -949,7 +952,7 @@ func (o *OpenAIChat) Stream(ctx context.Context, rc *domain.RequestContract) (<-
 							Message: "chat stream emitted usage before a terminal finish reason"}}
 						return ioEnd
 					}
-					ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: mapFinish(finish), Model: responseModel, ServiceTier: responseTier, Usage: &u}
+					ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: mapFinish(finish), Model: responseModel, ServiceTier: responseTier, Usage: &u, UsageState: lastUsageState}
 					ended = true
 					return ioEnd
 				}
@@ -971,7 +974,7 @@ func (o *OpenAIChat) Stream(ctx context.Context, rc *domain.RequestContract) (<-
 				ch <- domain.StreamEvent{Kind: domain.EvError, Err: failure}
 				return
 			}
-			ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: mapFinish(finish), Model: responseModel, ServiceTier: responseTier, Usage: lastUsage}
+			ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: mapFinish(finish), Model: responseModel, ServiceTier: responseTier, Usage: lastUsage, UsageState: lastUsageState}
 		}
 	}()
 	return ch, cancel, nil

@@ -1,5 +1,5 @@
-const visualVersion = 'ferry-request-speed-20261028';
-const partUrls = Array.from({ length: 14 }, (_, i) => `./app.part${i + 1}.jsfrag?visual=${visualVersion}`);
+const visualVersion = 'smartapi-observability-brand-20261104';
+const partUrls = Array.from({ length: 15 }, (_, i) => `./app.part${i + 1}.jsfrag?visual=${visualVersion}`);
 const parts = await Promise.all(partUrls.map(async url => {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to load ${url}: ${response.status}`);
@@ -15,6 +15,12 @@ source = source.replace(
   "import { scenarios } from './mock-data.js';",
   `const { scenarios } = await import(new URL('./mock-data.js?visual=${visualVersion}', document.baseURI).href);`
 );
+
+for (const [declaration,binding,file] of [
+ ["import * as observabilityModel from './observability-model.js';","observabilityModel","observability-model.js"],
+ ["import { ObservationResource } from './observability-state.js';","{ ObservationResource }","observability-state.js"],
+ ["import { mountRouteExplanation } from './route-explanation.js';","{ mountRouteExplanation }","route-explanation.js"],
+]) source=source.replace(declaration,`const ${binding} = await import(new URL('./${file}?visual=${visualVersion}',document.baseURI).href);`);
 
 const blob = new Blob([source], { type: 'text/javascript' });
 const moduleUrl = URL.createObjectURL(blob);

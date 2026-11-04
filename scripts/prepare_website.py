@@ -12,6 +12,8 @@ PAGES = {
     'CONTRIBUTING.md':'contributing.md', 'CONTRIBUTING.en.md':'en/contributing.md',
     'SECURITY.md':'security.md', 'SECURITY.en.md':'en/security.md',
     'docs/headless.md':'guide/headless.md', 'docs/headless.en.md':'en/guide/headless.md',
+    'docs/session-observability.md':'guide/session-observability.md',
+    'docs/session-observability.en.md':'en/guide/session-observability.md',
     'docs/development.md':'development.md', 'docs/development.en.md':'en/development.md',
 }
 for guide in ('performance','docker','faq','troubleshooting','hermes','autoreset','logical-models','credential-import','codex-usage-protection'):

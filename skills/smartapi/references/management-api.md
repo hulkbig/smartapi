@@ -80,6 +80,11 @@ For high-risk calls, obtain explicit user approval and pass `--confirm-high-risk
 | Session only | `POST /api/providers/{id}/connections/{connection_id}/oauth/usage-reset-requests/{request_id}/confirm` | Administrator session + CSRF + explicit popup confirmation; unavailable to this Skill |
 | Ordinary | `GET /api/requests` | Server-filtered request ledger |
 | Ordinary | `GET /api/requests/{id}` | Client request, attempts, trace, impact, debug capture |
+| Ordinary | `GET /api/sessions` | Scoped Session summaries, statistics, coverage and cursor |
+| Ordinary | `GET /api/sessions/{id}` | Scoped Session detail, timings, recovery and participating resources |
+| Ordinary | `GET /api/sessions/{id}/requests` | Session request timeline with limit/offset |
+| Ordinary | `GET /api/provider-traffic` | Session/Request traffic sources with cursor pagination |
+| Ordinary | `GET /api/providers/{id}/traffic` | Provider participation and separately marked waiting sources |
 | Ordinary | `GET /api/queue` | Live admission counts, per-connection capacity and effective concurrency policy |
 | Ordinary | `GET /api/settings` | Runtime-local settings |
 | High | `PATCH /api/settings` | Change runtime-local settings |
@@ -317,7 +322,10 @@ and makes enabled scheduled providers due again.
 
 `GET /api/settings` returns the runtime-local settings: `debug_request_response` (ledger request/response
 debug capture) and `scheduled_model_sync_enabled` (the global provider model sync schedule switch,
-default `true`). `PATCH /api/settings` is high-risk and accepts either field:
+default `true`), and `observability_content_mode` (`metadata_only` by default, or `excerpt`).
+The last setting captures only bounded visible user/response excerpts for new requests, independently
+of full debug capture. Disabling it retains existing excerpts until normal request retention expires.
+`PATCH /api/settings` is high-risk and accepts these fields:
 
 ```json
 {"scheduled_model_sync_enabled": false}
@@ -343,6 +351,18 @@ health and quota snapshots still describe the current runtime; historical bounds
 ## Request filters
 
 `GET /api/requests` supports `window`, `limit`, `offset`, `q`, `conversation_id`, `model`, `provider`, `connection`, `api_key`, `outcome`, `failure_type`, `status`, `revision`, `from`, and `to`. Use URL encoding for every user-controlled value.
+It also accepts `session_id` and stable `caller_id`. Summaries add `session_id`, `content_preview`,
+association/usage/cost coverage and Trace watermarks. Request detail adds the persisted `route_snapshot`,
+`decision_updates`, ordered event `seq`, `trace_revision` and `events_truncated`; historical conditions
+must not be reconstructed from current Provider state.
+
+Session and traffic collections accept aggregate windows, `q` (maximum 200 characters), `caller_id`,
+`logical_model`, `participating_provider`, `status` and `outcome` with AND semantics. Traffic reads use
+`mode=session|request`. Collections default to 50 rows (maximum 200), with opaque `cursor`; Session
+request timelines retain limit/offset. A single Session may use `scope=all` without window bounds.
+The window selects request entry timestamps in `[from,to)`. `as_of` guarantees one response's committed
+snapshot, not frozen membership across pages. Candidate-only requests do not count as Provider
+participation; selected but undispatched sources are separate. See [Session semantics](../../../docs/session-observability.md).
 Requests appear from ingress with `received`, `waiting`, `active`, `recovering` or `streaming` status before a final outcome. These live rows are excluded from finalized usage and cost analytics.
 `GET /api/queue` reports actual gate `waiting` and `running` counts, configured connections, their effective runtime limits, and active client requests. Background jobs share gate capacity. Effective concurrency priority is Connection > Provider > global; global settings use `PATCH /api/settings` with `expected_revision`, and Connection overrides use the normal draft/apply path.
 Its existing filter behavior is unchanged: `window` supplies the default bounds, and each explicitly

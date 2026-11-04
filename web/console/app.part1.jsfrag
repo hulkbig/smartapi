@@ -1,5 +1,8 @@
 import { createAdapter } from './api.js';
 import { scenarios } from './mock-data.js';
+import * as observabilityModel from './observability-model.js';
+import { ObservationResource } from './observability-state.js';
+import { mountRouteExplanation } from './route-explanation.js';
 
 const adapter = createAdapter();
 const demoMode = adapter.mode === 'mock';

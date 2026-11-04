@@ -1,14 +1,14 @@
 # Console asset review
 
 The shipped console includes `web/console/brand.svg`, its reverse variant and
-`favicon.svg`, alongside inline SVG interface icons and data charts. It has no bundled font, raster
-image, external icon package or asset CDN. CSS font names use fonts installed on
+`favicon.svg`, alongside inline SVG interface icons and data charts. The route
+explanation also includes three Provider SVGs documented in `LICENSES/LobeHub/`.
+It has no bundled font, raster image or asset CDN. CSS font names use fonts installed on
 the client; they do not redistribute those fonts.
 
-The SmartAPI mark is an original geometric S drawn for this project on
-2026-11-02, with diagonally cut terminals suggesting a continuous request path.
-It replaces the former Ferry mark with lowercase-f negative space. The solid charcoal (#242424) and white
-variants share the same outline, used by the sidebar, login and favicon.
+The SmartAPI mark is the existing project-authored geometric S from the
+SmartAPI release, drawn on 2026-11-02. Its charcoal and white variants share
+one outline and are used by the sidebar, login, favicon and route gateway.
 This records its implementation history, not trademark clearance.
 
 The settings icon in `app.part1.jsfrag` has structural correspondence with the

@@ -45,3 +45,12 @@ the documentation ecosystem diagrams. The MIT license is retained in
 LICENSES/LobeIcons/LICENSE; package integrity, source files and hashes are
 recorded in LICENSES/LobeIcons/source.json. Product names and marks identify
 their respective products and do not imply endorsement or certification.
+
+LobeHub provider icons
+https://github.com/lobehub/lobe-icons
+
+The Request explanation uses three provider SVG marks distributed with Magpie
+snapshot 0ee424e3ee61ae545d93160084a8d930b88a8193. LobeHub and Magpie MIT notices
+are retained in LICENSES/LobeHub/NOTICE.txt. Asset paths, hashes and provenance
+are recorded in LICENSES/LobeHub/source.json. Brand marks identify their
+respective providers and do not imply endorsement.

@@ -9,27 +9,35 @@ import (
 
 type ingressRequestKey struct{}
 type ingressRequest struct {
-	id        string
-	startedAt time.Time
-	claimed   atomic.Bool
-	finished  atomic.Bool
-	preflight preflightTrace
+	id             string
+	startedAt      time.Time
+	claimed        atomic.Bool
+	finished       atomic.Bool
+	preflight      preflightTrace
+	excerptEnabled bool
 }
 
 // ObserveIngress makes even decoding/authentication failures visible without
 // recording credentials or request bodies. Execute reuses the same logical ID.
 func (s *Scheduler) ObserveIngress(ctx context.Context, protocol domain.Protocol, meta RequestMeta) (context.Context, func(int)) {
-	request := &ingressRequest{id: newRequestID(), startedAt: time.Now()}
+	request := &ingressRequest{id: newRequestID(), startedAt: time.Now(), excerptEnabled: s.led.ObservationContentMode() == "excerpt"}
 	rec := domain.RequestRecord{ID: request.id, Ts: request.startedAt, Protocol: protocol, ClientIP: meta.ClientIP, Status: "received"}
+	callerIdentityID := ""
 	world := s.world.Load()
 	if world != nil && world.snap != nil {
 		rec.RuntimeRevision = world.snap.Version
 	}
 	if key, secretID := s.resolveKeyInWorld(world, meta.credential(), meta.CallerID); key != nil {
 		rec.ConsumerKey, rec.APIKeySecretID = key.Identity.Name, secretID
+		callerIdentityID = key.Identity.ID
 	}
 	s.openIngress.Add(1)
 	s.led.BeginIngressRequest(rec)
+	mode := "metadata_only"
+	if request.excerptEnabled {
+		mode = "excerpt"
+	}
+	s.led.BeginObservation(domain.ObservationInput{RequestID: rec.ID, At: rec.Ts, CallerIdentityID: callerIdentityID, Protocol: protocol, Evidence: observationEvidence(meta, nil), ContentMode: mode})
 	ctx = context.WithValue(ctx, ingressRequestKey{}, request)
 	s.observePreflightPhase(ctx, domain.ExecutionTraceEvent{
 		At: request.startedAt, Category: domain.TraceRoute, Type: "REQUEST_RECEIVED", Protocol: protocol,
@@ -72,6 +80,25 @@ func (s *Scheduler) ObserveIngress(ctx context.Context, protocol domain.Protocol
 func (s *Scheduler) ObserveFirstOutput(ctx context.Context) {
 	if request, ok := ctx.Value(ingressRequestKey{}).(*ingressRequest); ok {
 		s.led.RecordFirstOutput(request.id, time.Now())
+	}
+}
+
+func (s *Scheduler) ObserveDelivery(ctx context.Context, failed bool) {
+	if request, ok := ctx.Value(ingressRequestKey{}).(*ingressRequest); ok {
+		s.led.RecordDelivery(request.id, failed || ctx.Err() != nil)
+	}
+}
+
+func (s *Scheduler) ObservationExcerptEnabled(ctx context.Context) bool {
+	if request, ok := ctx.Value(ingressRequestKey{}).(*ingressRequest); ok {
+		return request.excerptEnabled
+	}
+	return false
+}
+
+func (s *Scheduler) ObserveResponseExcerpt(ctx context.Context, preview domain.ContentPreview) {
+	if request, ok := ctx.Value(ingressRequestKey{}).(*ingressRequest); ok {
+		s.led.CaptureResponseExcerpt(request.id, preview)
 	}
 }
 

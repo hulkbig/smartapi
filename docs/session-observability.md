@@ -1,0 +1,68 @@
+# Sessions、请求前缀与路由解释
+
+[English](session-observability.en.md)
+
+Requests 下方的 Sessions 将同一持续任务中的请求放在一起。它显示请求数、当前活跃、失败与恢复、模型、参与 Provider、用量和已知成本；详情中有请求时间线、时延分位数及对应样本数、恢复次数与额外耗时。选择一条请求即可查看简版流转，并跳转完整 Request 详情。
+
+## Session 如何关联
+
+Session 是观测分组，与模型绑定的 Conversation 续接对象分开。同一调用方的可靠客户端 thread / conversation 线索可跨模型和 Provider 归组，原有 Conversation 续接限制继续生效。
+
+归组使用稳定的 API Key 身份 ID，不使用可改名的显示名称或轮换 secret。不同身份不会因为相同 thread 合并。Responses 的父响应或 conversation 只有经同调用方的持久映射验证后才继承 Session；相互冲突的高置信线索标记冲突，不自动合并。
+
+缓存键、IP、相同文本、时间接近以及 caller 范围线索不单独建立 Session。缺少可靠证据的请求显示为独立请求。旧记录没有足够证据时保留未关联状态，不按当前配置回填历史。
+
+## Request / Response 前缀
+
+Settings 中的“请求与响应前缀”独立于完整 Request Debug 留存，默认仅记录元数据。开启后只对新请求采集有限摘要：用户可见输入和已成功向客户端交付的响应，各最多 160 个 Unicode 字符；工具仅保留最多三个名称。
+
+摘要不保存 system/developer 内容、隐藏推理、工具参数、图片正文或原始请求头。已识别的凭据格式会遮蔽，但自然语言仍可能包含敏感内容，应按实际需要开启。关闭后不补录已开始的请求，也不立即删除历史摘要；摘要和 Session 标题遵循请求历史的保留期。
+
+列表通常展示最新有意义的 Request。与同一 Session 前一条输入相同或只能确认截断前缀相同时，有输出则优先展示 Response；这项比较不受分页或当前筛选影响。等待响应、仅有工具、未采集、原生格式无法解析、历史缺失和交付中断分别显示，不把缺失内容显示成空文本。
+
+流式摘要只采集成功写入客户端的可见文本。无法可靠解析的原生帧显示不支持摘要，不盲截原始字节；取消后已交付部分标记为 partial。
+
+## 看懂候选与高亮
+
+Session、Request 详情和 Provider 流量区共用同一个解释组件：来源 → SmartAPI → 此请求当时路由中的全部 Provider/连接。没有匹配连接的路由步骤也会保留。未进入该路由的其他已注册 Provider 不显示为候选。
+
+候选名称和条件来自请求时的快照。条件有通过、排除、未知和未评估四种结果，短路未执行的条件不会显示为通过。执行中的失败、连接恢复和路由回退追加为决策更新，保留最初判断，不重新探测上游或用当前健康状态改写历史。
+
+“已选”与“激活”分别表示等待准入和实际发送后的调用。等待时没有向上游流动的包。429 等可恢复错误先返回 SmartAPI，再转向实际下一连接；客户端首个输出与上游首事件分开记录。取消、重启残留和交付失败不会显示为成功交付。
+
+可播放、暂停、重播、单步、调整速度和返回最新状态。关闭动效或系统要求减少动效时保留静态高亮和步骤说明。隐藏页面、离屏和离开页面暂停动效或轮询。
+
+## Provider 的流量来源
+
+Providers 总览和 Provider 详情可以切换 Session / Request 来源，每次布局四张卡，通过分页访问更多来源。卡片显示摘要和统计；当前具体 Request 决定中央与右侧高亮路径。Session 总体状态可能包含多种请求状态，切换具体 Request 后，选中卡片的状态和摘要跟随该请求。
+
+Provider 详情只纳入有 attempt 或正在实际发送的参与请求，重复尝试按一个逻辑请求计数。已选但尚未发送的来源单独列为待发送；仅被列作候选不算参与。右侧仍显示所选请求的完整候选，包括其他 Provider 的恢复去向。
+
+卡片的“参与请求总成本”沿用请求账本，可能包含其他 Provider 的恢复开销。各 Provider 的参与集合可能重叠，不能相加当作全站总量。
+
+## 统计、时间和数据覆盖
+
+窗口按请求进入时间 `[from,to)` 定义；调用方、逻辑模型、Provider、状态、结果和搜索条件取 AND。列表、统计和选中摘要来自同一已提交的数据库读快照。成功率只用成功与失败终态，取消和活跃请求排除；含失败 Session 与恢复成功 Session 可以重叠。
+
+Usage 和成本有 known、partial、unknown 三种覆盖状态。明确报告的零值可以显示为零；缺 usage 或缺费率不当作零。请求级成本不会再与 attempts 重复相加；缓存读取/写入单列，不额外加进输入总量。
+
+默认约三秒轮询，每个视图只保留一个在途读取。错误保留最后数据并提示，HTTP 模式不会回退演示数据。`as_of`、Trace revision 和 event seq 表示观测水位，不表示零延迟。动态游标保证单次响应一致，不冻结多次翻页的整份数据；手动刷新从第一页读取。
+
+## 管理接口
+
+沿用管理端认证、CSRF 和 Settings 写入保护。
+
+| 地址 | 用途 |
+| --- | --- |
+| `GET /api/sessions` | Session 列表、六项统计、关联覆盖、游标 |
+| `GET /api/sessions/{id}` | 当前范围的 Session 统计、时延、参与资源和恢复指标 |
+| `GET /api/sessions/{id}/requests` | 请求时间线，沿用 limit/offset |
+| `GET /api/provider-traffic` | 所有来源，`mode=session\|request` |
+| `GET /api/providers/{id}/traffic` | 指定 Provider 的参与/待发送来源 |
+| `GET /api/requests` | 增量返回 Session、摘要、覆盖与版本信息 |
+| `GET /api/requests/{id}` | 完整历史候选、条件、决策更新、执行事件与摘要 |
+| `GET/PATCH /api/settings` | `observability_content_mode=metadata_only\|excerpt` |
+
+新增集合默认 50、上限 200，页面动画每页四个来源。支持 `from`、`to`、`q`、`caller_id`、`logical_model`、`participating_provider`、`status` 和 `outcome`；搜索最多 200 字符，只查保留的摘要、安全元数据和 ID。完整 request ID 命中优先，并定位准确请求。单 Session 可用 `scope=all` 查看保留期内全部记录。
+
+本功能使用增量 SQLite 表和 attempt 覆盖列，升级不重算账务，不全量回填旧正文或旧 Session。现有请求与 Conversation 接口保持兼容。

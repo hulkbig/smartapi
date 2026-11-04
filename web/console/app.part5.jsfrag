@@ -26,7 +26,21 @@ function requestDataSync(id){
   return latest&&(!cached||Date.parse(latest.updated_at)>=Date.parse(cached.updated_at))?{...detail,raw:{...detail.raw,reference_pricing:latest}}:detail;
 }
 function prettyDebug(value){try{return JSON.stringify(value,null,2)}catch{return String(value??'')}}
-async function loadAndRenderRequest(id){try{state.requestCache.set(id,await adapter.getRequest(id));render()}catch(e){showToast(e.message,'error')}}
+const requestDetailLoads=new Map();
+async function loadAndRenderRequest(id){
+  if(requestDetailLoads.has(id))return requestDetailLoads.get(id).promise;
+  for(const [other,load]of requestDetailLoads)if(other!==id){load.controller.abort();requestDetailLoads.delete(other)}
+  const controller=new AbortController();
+  const promise=Promise.resolve().then(()=>adapter.getRequest(id,{signal:controller.signal})).then(request=>{
+    if(controller.signal.aborted)return;
+    state.requestCache.set(id,request);if(currentRoute().section==='requests'&&currentRoute().id===id)render();
+  }).catch(error=>{if(!controller.signal.aborted&&error?.name!=='AbortError')showToast(error.message,'error')})
+    .finally(()=>{if(requestDetailLoads.get(id)?.controller===controller)requestDetailLoads.delete(id)});
+  requestDetailLoads.set(id,{promise,controller});return promise;
+}
+function cancelRequestDetailLoads(){for(const load of requestDetailLoads.values())load.controller.abort();requestDetailLoads.clear();}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)cancelRequestDetailLoads();});
+window.addEventListener('hashchange',()=>{const route=currentRoute();for(const [id,load]of requestDetailLoads)if(route.section!=='requests'||route.id!==id){load.controller.abort();requestDetailLoads.delete(id)}});
 function conversationRequestsSort(left,right){const a=Date.parse(left.timestamp||''),b=Date.parse(right.timestamp||'');if(Number.isFinite(a)&&Number.isFinite(b)&&a!==b)return a-b;const time=String(left.time||'').localeCompare(String(right.time||''));return time||String(left.id||'').localeCompare(String(right.id||''))}
 async function loadConversationRequests(conversationId,{force=false}={}){
   if(!conversationId||conversationId==='—')return [];

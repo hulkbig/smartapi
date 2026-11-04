@@ -501,6 +501,7 @@ func (a *Anthropic) Invoke(ctx context.Context, rc *domain.RequestContract) (*do
 			"Anthropic stop reason "+out.StopReason+" is native-only")
 	}
 	r.Usage = decodeUsage(out.Usage)
+	r.UsageState = usageEvidence(out.Usage)
 	markResponseConversionIssues(r)
 	return r, nil
 }
@@ -538,6 +539,7 @@ func (a *Anthropic) Stream(ctx context.Context, rc *domain.RequestContract) (<-c
 		defer close(ch)
 		defer resp.Body.Close()
 		usage := domain.Usage{}
+		inputUsageSeen, outputUsageSeen := false, false
 		responseModel := ""
 		finish := ""
 		blockKinds := map[int]string{}
@@ -643,6 +645,7 @@ func (a *Anthropic) Stream(ctx context.Context, rc *domain.RequestContract) (<-c
 				}
 				if body.Message != nil && body.Message.Usage != nil {
 					u := decodeUsage(*body.Message.Usage)
+					inputUsageSeen, _ = usagePresence(*body.Message.Usage)
 					usage.InputTokens += u.InputTokens
 					usage.CacheReadTokens += u.CacheReadTokens
 					usage.CacheWriteTokens += u.CacheWriteTokens
@@ -818,11 +821,12 @@ func (a *Anthropic) Stream(ctx context.Context, rc *domain.RequestContract) (<-c
 				}
 				if body.Usage != nil {
 					u := decodeUsage(*body.Usage)
+					_, outputUsageSeen = usagePresence(*body.Usage)
 					usage.OutputTokens += u.OutputTokens
 				}
 			case "message_stop":
 				u := usage
-				ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: finish, Usage: &u, Model: responseModel}
+				ch <- domain.StreamEvent{Kind: domain.EvEnd, FinishReason: finish, Usage: &u, Model: responseModel, UsageState: usagePresenceState(inputUsageSeen, outputUsageSeen)}
 				return ioEnd
 			case "error":
 				msg := "upstream stream error"

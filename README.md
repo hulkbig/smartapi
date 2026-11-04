@@ -61,6 +61,12 @@ docker compose up -d --no-build
 
 [配置逻辑模型](docs/guide/logical-models.md)
 
+### 看懂每次请求与整个 Session
+
+按 Session 查看请求时间线、恢复、用量和成本。Requests、Sessions 与 Providers 共用路由解释，保留当时的全部候选与筛选条件，高亮实际连接，并支持回放。Request / Response 前缀可单独开启，默认仅采集元数据。
+
+[Sessions 与请求解释](docs/session-observability.md)
+
 ## 极致性能
 
 ### 内存占用更低

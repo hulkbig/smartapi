@@ -150,10 +150,14 @@ func requestMeta(r *http.Request, rc *domain.RequestContract) sched.RequestMeta 
 		{[]string{"X-Hermes-Session-Key"}, "hermes.session_key", domain.AffinityCache},
 		{[]string{"X-OpenClaw-Session-Key"}, "openclaw.session_key", domain.AffinityConversation},
 	} {
+		chosen := false
 		for _, header := range item.headers {
 			if raw := r.Header.Get(header); strings.TrimSpace(raw) != "" {
-				add(item.source, item.scope, raw, domain.ConfHigh)
-				break
+				meta.ObservationEvidence = append(meta.ObservationEvidence, domain.NewAffinityEvidence(item.source, item.scope, raw, domain.ConfHigh))
+				if !chosen {
+					add(item.source, item.scope, raw, domain.ConfHigh)
+					chosen = true
+				}
 			}
 		}
 	}
