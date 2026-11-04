@@ -11,11 +11,19 @@ const context=vm.createContext({
   location:{hash:'#/sessions/s?from=2026-09-01T00:00:00Z&to=2026-09-02T00:00:00Z&participating_provider=p1'},
   document:{addEventListener:(name,fn)=>documentEvents.set(name,fn),activeElement:null},
   window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},
-  state:{requestCache:new Map(),requests:[]},render:()=>{},
+  state:{requestCache:new Map(),requests:[]},render:()=>{},consoleLocale:'en',
+  esc:value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
 });
 const part=await fs.readFile(new URL('./app.part15.jsfrag',import.meta.url),'utf8');
 vm.runInContext(part,context);
 const run=script=>vm.runInContext(script,context);
+for(const content_state of ['disabled','legacy_unavailable','pending','unsupported','empty','partial']){
+  context.missingPreview={content_state,preview_text:''};
+  assert.equal(run('observationPreview(missingPreview)'),'',`${content_state} must not create a placeholder row`);
+}
+assert.equal(run('observationPreview({preview_text:"  "})'),'');
+assert.match(run('observationPreview({preview_role:"response",preview_text:"Useful <answer>"})'),/<b>Response<\/b>/);
+assert.match(run('observationPreview({preview_role:"response",preview_text:"Useful <answer>"})'),/Useful &lt;answer&gt;/,'real excerpts remain escaped and visible');
 const first=run(`observationContext('session','s')`);
 assert.equal(first.filters.participating_provider,'p1');
 first.filters.q='operator draft';

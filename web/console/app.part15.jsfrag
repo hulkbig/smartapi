@@ -61,8 +61,9 @@ function observationRequestHref(id,ctx=activeObservationContext){
 }
 
 function observationPreview(preview={},extra=''){
-  const p={content_state:'legacy_unavailable',...preview},text=p.preview_text||observabilityModel.previewPlaceholder(p,consoleLocale);
-  return `<div class="observation-preview ${extra}"><b>${esc(observabilityModel.previewLabel(p,consoleLocale))}</b><span data-i18n-skip class="${p.preview_text?'':'preview-muted'}" title="${esc(text)}">${esc(text)}</span></div>`;
+  const text=String(preview.preview_text||'').trim();
+  if(!text)return '';
+  return `<div class="observation-preview ${extra}"><b>${esc(observabilityModel.previewLabel(preview,consoleLocale))}</b><span data-i18n-skip title="${esc(text)}">${esc(text)}</span></div>`;
 }
 
 function requestObservationPrefix(request){return observationPreview(observabilityModel.previewOf(request),'request-entry-preview');}
@@ -79,13 +80,13 @@ function observationStatus(raw){
 function observationStats(stats={}){
   const values=[
     ['Sessions',stats.sessions,`${stats.independent_requests??0} ${nt('independent requests','条独立请求')} · ${stats.association_coverage==null?'—':Math.round(stats.association_coverage*100)+'%'} ${nt('linked','已关联')}`],
-    [nt('Active Sessions','活跃 Sessions'),stats.active_sessions,nt('Unfinished requests in scope','范围内仍有请求进行中')],
-    [nt('Sessions with failures','含失败的 Sessions'),stats.failed_sessions,nt('Canceled requests shown separately','取消请求单独统计')],
-    [nt('Recovered Sessions','恢复成功的 Sessions'),stats.recovered_sessions,nt('At least one recovered request','至少一条请求恢复成功')],
-    [nt('Requests / Session','平均请求数'),stats.average_requests_per_session==null?null:Number(stats.average_requests_per_session).toFixed(1),nt('Associated requests only','仅统计已关联请求')],
+    [nt('Active Sessions','活跃 Sessions'),stats.active_sessions,''],
+    [nt('Sessions with failures','含失败的 Sessions'),stats.failed_sessions,''],
+    [nt('Recovered Sessions','恢复成功的 Sessions'),stats.recovered_sessions,''],
+    [nt('Requests / Session','平均请求数'),stats.average_requests_per_session==null?null:Number(stats.average_requests_per_session).toFixed(1),''],
     [nt('Known request cost','已知请求成本'),observationMoney(stats.known_cost,stats.cost_state),`${stats.cost_known_requests??0}/${stats.requests??0} ${nt('fully observed','条完整记录')}`],
   ];
-  return `<div class="observability-stats">${values.map(([label,value,sub])=>`<div class="observability-stat"><span>${esc(label)}</span><strong>${esc(value??'—')}</strong><small>${esc(sub)}</small></div>`).join('')}</div>`;
+  return `<div class="observability-stats">${values.map(([label,value,sub])=>`<div class="observability-stat"><span>${esc(label)}</span><strong>${esc(value??'—')}</strong>${sub?`<small>${esc(sub)}</small>`:''}</div>`).join('')}</div>`;
 }
 
 function observationScope(ctx){
@@ -109,7 +110,7 @@ function observationEnsureLoad(ctx){if(!ctx.resource.data&&!ctx.resource.loading
 
 function observationEmpty(ctx,message){
   if(ctx.resource.loading&&!ctx.resource.data)return `<div class="observation-empty">${nt('Loading observations…','正在读取会话和请求…')}</div>`;
-  return `<div class="observation-empty ${ctx.resource.error?'observation-error':''}"><strong>${esc(ctx.resource.error?nt('Observations unavailable','会话记录暂不可用'):message)}</strong><span>${esc(ctx.resource.error?.message||nt('Adjust the time range or filters. Requests without reliable Session evidence remain independent.','可调整时间范围或筛选；缺少可靠会话线索的请求保留为独立请求。'))}</span></div>`;
+  return `<div class="observation-empty ${ctx.resource.error?'observation-error':''}"><strong>${esc(ctx.resource.error?nt('Observations unavailable','会话记录暂不可用'):message)}</strong>${ctx.resource.error?`<span>${esc(ctx.resource.error.message)}</span>`:''}</div>`;
 }
 
 function observationPagination(ctx,{timeline=false}={}){
@@ -130,7 +131,7 @@ function pageSessions(id){
   const data=ctx.resource.data;
   if(id)return pageSessionDetail(ctx);
   const rows=data?.page?.sessions||[];
-  return `<div class="observability-page"><div class="page-head"><div class="head-main"><h1>Sessions</h1><p>${nt('Follow a continuous task across its requests, models and Providers.','按持续任务组织请求，查看跨模型与 Provider 的执行过程。')}</p></div><a class="btn" href="#/requests">${nt('Requests','请求列表')} ↗</a></div>${observationToolbar(ctx)}${observationScope(ctx)}${observationStats(data?.page?.stats)}
+  return `<div class="observability-page"><div class="page-head"><div class="head-main"><h1>Sessions</h1></div><a class="btn" href="#/requests">${nt('Requests','请求列表')} ↗</a></div>${observationToolbar(ctx)}${observationScope(ctx)}${observationStats(data?.page?.stats)}
     ${rows.length?`<section class="card table-wrap"><table class="session-table"><thead><tr><th>Session · Request / Response</th><th>${nt('Caller / state','调用方 / 状态')}</th><th>${nt('Requests / models','请求 / 模型')}</th><th>${nt('Usage / cost','用量 / 成本')}</th><th>${nt('Last activity','最近活动')}</th></tr></thead><tbody>${rows.map(row=>`<tr class="${ctx.sourceId===row.source_id?'selected':''}"><td><a class="session-title" data-i18n-skip href="${esc(observationSessionHref(row.session_id,ctx))}">${esc(row.title||row.session_id)}</a>${observationPreview(row.content_preview)}<div class="observation-identifiers" data-i18n-skip>${esc(row.session_id)} <button class="btn small" data-observe="source" data-source="${esc(row.source_id)}">${nt('Flow','流转')}</button></div></td><td><strong data-i18n-skip>${esc(row.caller||row.caller_identity_id||'—')}</strong><small data-i18n-skip>${esc(row.client_kind||'api')}</small><div class="observation-tags">${row.active_requests?badge(observationStatus(row.selected_request_status)):''}${row.failed?badge(nt('Failed','失败')):''}${row.recovered?badge(nt('Recovered','已恢复')):''}${!row.active_requests&&!row.failed&&!row.recovered?badge(observationStatus(row.selected_request_status)):''}</div></td><td><strong class="session-number">${row.request_count}</strong><small>${row.logical_models?.length||0} ${nt('models','个模型')} · ${row.provider_ids?.length||0} Providers</small></td><td><strong>${row.usage_state==='unknown'?'—':fmtCompact(Number(row.usage?.input_tokens||0)+Number(row.usage?.output_tokens||0))} tokens</strong><small>${esc(observationMoney(row.known_cost,row.cost_state))}${row.cost_state==='partial'?' · '+nt('Partial','部分已知'):''}</small></td><td><small>${esc(consoleDateTime(row.last_at,true))}</small><a href="${esc(observationRequestHref(row.selected_request_id,ctx))}">Request ↗</a></td></tr>`).join('')}</tbody></table></section>${observationPagination(ctx)}${observationFocus(ctx)}`:observationEmpty(ctx,nt('No matching Sessions','没有匹配的 Sessions'))}</div>`;
 }
 
@@ -166,13 +167,13 @@ function observationRequestPicker(ctx){
   const data=ctx.resource.data;if(!data?.requestId)return '';
   const entries=[...(data.requests||[])];
   if(!entries.some(r=>r.id===data.requestId)&&data.detail)entries.unshift(data.detail);
-  return `<div class="observation-traffic-selector"><label>${nt('Selected Request','当前 Request')}</label><select class="select" data-observe-field="request" aria-label="${esc(nt('Selected Request','当前 Request'))}">${entries.map(request=>`<option value="${esc(request.id)}" ${request.id===data.requestId?'selected':''}>${esc(request.id)} · ${esc(request.result||request.raw?.status||'')}</option>`).join('')}</select><span class="cell-sub">${nt('Only this request drives the highlighted path.','高亮路径仅解释当前选中的请求。')}</span></div>`;
+  return `<div class="observation-traffic-selector"><label>${nt('Selected Request','当前 Request')}</label><select class="select" data-observe-field="request" aria-label="${esc(nt('Selected Request','当前 Request'))}">${entries.map(request=>`<option value="${esc(request.id)}" ${request.id===data.requestId?'selected':''}>${esc(request.id)} · ${esc(request.result||request.raw?.status||'')}</option>`).join('')}</select></div>`;
 }
 
 function renderObservationTraffic(providerId=''){
   const ctx=observationContext('provider',providerId);observationEnsureLoad(ctx);
   const data=ctx.resource.data,sources=data?.sources||[];
-  return `<section class="observability-section" data-observation-provider="${esc(providerId)}"><div class="observability-head"><div><h2>${nt('Traffic sources','流量来源')}</h2><p class="cell-sub">${nt(providerId?'Requests that used this Provider, plus separately marked waiting sources.':'Select a Session or Request to follow its actual route.',providerId?'展示参与此 Provider 的请求，等待发送的来源单独标记。':'选择一个 Session 或 Request，查看它的实际流转。')}</p></div><div class="observation-view-toggle"><button data-observe="mode" data-mode="session" class="${ctx.mode==='session'?'active':''}">Sessions</button><button data-observe="mode" data-mode="request" class="${ctx.mode==='request'?'active':''}">Requests</button></div></div>
+  return `<section class="observability-section" data-observation-provider="${esc(providerId)}"><div class="observability-head"><div><h2>${nt('Traffic sources','流量来源')}</h2></div><div class="observation-view-toggle"><button data-observe="mode" data-mode="session" class="${ctx.mode==='session'?'active':''}">Sessions</button><button data-observe="mode" data-mode="request" class="${ctx.mode==='request'?'active':''}">Requests</button></div></div>
     ${observationToolbar(ctx)}${observationScope(ctx)}${data?`<div class="observation-summary-strip"><span><small>${nt('Sources','来源')}</small><strong>${data.page.total}</strong></span><span><small>${nt('Participating requests','参与请求')}</small><strong>${data.page.stats?.participating_requests??0}</strong></span><span><small>${nt('Waiting to send','待发送')}</small><strong>${data.page.stats?.pending_requests??0}</strong></span><span><small>${nt('Participating request cost','参与请求总成本')}</small><strong>${esc(observationMoney(data.page.stats?.known_cost,data.page.stats?.cost_state))}</strong></span></div>`:''}
     ${sources.length?`${observationRequestPicker(ctx)}${data.detail?`<div data-observation-graph="${esc(ctx.key)}"></div>`:observationEmpty(ctx,nt('Request details unavailable','请求详情暂不可用'))}${observationPagination(ctx)}`:observationEmpty(ctx,nt('No matching traffic sources','没有匹配的流量来源'))}</section>`;
 }
@@ -215,8 +216,8 @@ function decorateObservedRequest(route){
   const section=document.createElement('section');section.className='observability-section';
   const p=observabilityModel.previewOf(request),session=request.sessionId||request.raw?.session_id;
   if(!ctx.requestScope){if(!ctx.entryQuery){const f=requestFilters();ctx.filters={window:f.window||'24h',q:'',logical_model:f.logical_model||'',participating_provider:f.participating_provider||'',status:f.status||'',outcome:f.outcome||''};if(f.from&&f.to){ctx.filters.from=f.from;ctx.filters.to=f.to;delete ctx.filters.window;}}ctx.requestScope=true;}
-  const responsePlaceholder=observabilityModel.liveRequestStatuses.has(request.raw?.status)?nt('Waiting for response','等待响应'):['disabled','legacy_unavailable','unsupported'].includes(p.content_state)?observabilityModel.previewPlaceholder(p,consoleLocale):nt('No visible response excerpt','没有可见响应前缀');
-  section.innerHTML=`<div class="observation-heading-actions"><div class="observation-summary-strip"><span><small>Request</small><strong data-i18n-skip>${esc(p.request_excerpt||observabilityModel.previewPlaceholder(p,consoleLocale))}</strong></span><span><small>Response</small><strong data-i18n-skip>${esc(p.response_excerpt||responsePlaceholder)}</strong></span></div>${session?`<a class="btn small" href="${esc(observationSessionHref(session,ctx))}">Session ↗</a>`:''}</div><div data-observation-graph="${esc(ctx.key)}"></div>`;
+  const excerpts=[['Request',p.request_excerpt],['Response',p.response_excerpt]].filter(([,text])=>String(text||'').trim());
+  section.innerHTML=`${excerpts.length||session?`<div class="observation-heading-actions">${excerpts.length?`<div class="observation-summary-strip">${excerpts.map(([label,text])=>`<span><small>${label}</small><strong data-i18n-skip>${esc(text)}</strong></span>`).join('')}</div>`:''}${session?`<a class="btn small" href="${esc(observationSessionHref(session,ctx))}">Session ↗</a>`:''}</div>`:''}<div data-observation-graph="${esc(ctx.key)}"></div>`;
   summary.after(section);
   return {ctx,detail:request};
 }
