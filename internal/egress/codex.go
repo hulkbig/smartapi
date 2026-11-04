@@ -427,6 +427,7 @@ func (c *CodexCaller) Invoke(ctx context.Context, rc *domain.RequestContract) (*
 				res.NativeResponseID = body.Response.ID
 				u := decodeUsage(body.Response.Usage)
 				res.Usage = u
+				res.UsageState = usageEvidence(body.Response.Usage)
 			}
 			done = true
 			return ioEnd
@@ -440,6 +441,7 @@ func (c *CodexCaller) Invoke(ctx context.Context, rc *domain.RequestContract) (*
 				res.NativeResponseID = body.Response.ID
 				u := decodeUsage(body.Response.Usage)
 				res.Usage = u
+				res.UsageState = usageEvidence(body.Response.Usage)
 				if body.Response.IncompleteDetails.Reason != "max_output_tokens" {
 					appendResponseConversionIssue(res,
 						"Responses incomplete reason "+body.Response.IncompleteDetails.Reason+" is native-only")
@@ -858,6 +860,7 @@ func (c *CodexCaller) Stream(ctx context.Context, rc *domain.RequestContract) (<
 					end.NativeConversationID = nativeConversationID(body.Response.Conversation)
 					usage := decodeUsage(body.Response.Usage)
 					end.Usage = &usage
+					end.UsageState = usageEvidence(body.Response.Usage)
 				}
 				ch <- end
 				return ioEnd
@@ -888,6 +891,7 @@ func (c *CodexCaller) Stream(ctx context.Context, rc *domain.RequestContract) (<
 					end.NativeConversationID = nativeConversationID(body.Response.Conversation)
 					usage := decodeUsage(body.Response.Usage)
 					end.Usage = &usage
+					end.UsageState = usageEvidence(body.Response.Usage)
 				}
 				ch <- end
 				return ioEnd

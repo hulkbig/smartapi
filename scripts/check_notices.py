@@ -66,6 +66,14 @@ def main():
     if command('go', 'env', 'GOVERSION') != toolchain['version']:
         raise ValueError('toolchain version changed; review notices')
     check_bytes(toolchain['notices'])
+    icon_source = json.loads((ROOT / 'LICENSES/LobeHub/source.json').read_text())
+    check_bytes(icon_source['notices'])
+    for row in icon_source['assets']:
+        asset = (ROOT / row['path']).resolve()
+        if not asset.is_relative_to((ROOT / 'web/console/observability-icons').resolve()):
+            raise ValueError('provider icon path escapes console assets')
+        if hashlib.sha256(asset.read_bytes()).hexdigest() != row['sha256']:
+            raise ValueError('provider icon checksum mismatch: ' + row['path'])
     goroot = Path(command('go', 'env', 'GOROOT'))
     for row in toolchain['notices']:
         if (goroot / row['source']).read_bytes() != (ROOT / row['path']).read_bytes():

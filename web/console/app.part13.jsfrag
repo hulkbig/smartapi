@@ -220,7 +220,7 @@ document.addEventListener('click',async event=>{
  if(action==='export'){
   const scope=nextScope(JSON.parse(el.dataset.scope||'{}')),data=state.analyticsCache.get(nextAnalyticsKey(scope))?.data;if(!data)return;
   const url=URL.createObjectURL(new Blob([JSON.stringify({schema:'smartapi.analytics/v1',...data},null,2)],{type:'application/json'}));
-  const link=document.createElement('a');link.href=url;link.download='ferry-analytics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;
+  const link=document.createElement('a');link.href=url;link.download='smartapi-analytics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;
  }
  render();
 },true);

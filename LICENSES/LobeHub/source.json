@@ -1,0 +1,25 @@
+{
+  "source": "https://github.com/lobehub/lobe-icons",
+  "via": "https://github.com/Yetone/magpie",
+  "via_revision": "0ee424e3ee61ae545d93160084a8d930b88a8193",
+  "assets": [
+    {
+      "path": "web/console/observability-icons/openai.svg",
+      "sha256": "a595df6b423920c67a7f8f73c063e4bfb72d415948097b6cac063a2366bb5186"
+    },
+    {
+      "path": "web/console/observability-icons/codex-color.svg",
+      "sha256": "4a2f43ce46b5b6e3722c95088f88d26ef91e6a8c2e598e70642a1c54367386e4"
+    },
+    {
+      "path": "web/console/observability-icons/anthropic.svg",
+      "sha256": "e833fdfa7e7187a86a05b870925067556a506dcd4239089aed73e1e58c9366a3"
+    }
+  ],
+  "notices": [
+    {
+      "path": "LICENSES/LobeHub/NOTICE.txt",
+      "sha256": "bb71703b3688cab022271d5357be02bfabbc6fc2921da87c3a7d137364ec6876"
+    }
+  ]
+}

@@ -188,6 +188,8 @@ MANAGEMENT_RESOURCES = {
     "models",
     "providers",
     "requests",
+    "sessions",
+    "provider-traffic",
     "queue",
     "settings",
     "api-keys",

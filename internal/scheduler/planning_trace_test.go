@@ -56,7 +56,7 @@ func TestPlanningTraceVisibleWhilePreparingAndCallingUpstream(t *testing.T) {
 	unblock.Do(func() { close(releasePreparation) })
 	await(invoking)
 	trace, err = f.ledger.QueryTrace(request.id)
-	if err != nil || trace == nil || trace.Events[len(trace.Events)-1].Type != "ADMISSION_COMPLETED" {
+	if err != nil || trace == nil || trace.Events[len(trace.Events)-1].Type != "UPSTREAM_DISPATCHED" {
 		t.Fatalf("pending upstream trace=%+v err=%v", trace, err)
 	}
 	close(releaseInvoke)
@@ -91,11 +91,11 @@ func TestPlanningTraceVisibleWhilePreparingAndCallingUpstream(t *testing.T) {
 		if event.Type == "COMPATIBILITY_COMPLETED" && !strings.Contains(event.Message, "prepared=3") {
 			t.Fatalf("missing preparation count: %+v", event)
 		}
-		if (event.Type == "ATTEMPT_STARTED" || event.Type == "ADMISSION_COMPLETED") && event.Attempt != 1 {
+		if (event.Type == "ATTEMPT_STARTED" || event.Type == "ADMISSION_COMPLETED" || event.Type == "UPSTREAM_DISPATCHED") && event.Attempt != 1 {
 			t.Fatalf("incorrect active attempt: %+v", event)
 		}
 	}
-	for _, phase := range []string{"REQUEST_RECEIVED", "BODY_PARSE_COMPLETED", "PLANNING_STARTED", "MODEL_RESOLVED", "ROUTE_RESOLVED", "COMPATIBILITY_STARTED", "COMPATIBILITY_COMPLETED", "PLANNING_COMPLETED", "ATTEMPT_STARTED", "ADMISSION_COMPLETED", "COMPLETE"} {
+	for _, phase := range []string{"REQUEST_RECEIVED", "BODY_PARSE_COMPLETED", "PLANNING_STARTED", "MODEL_RESOLVED", "ROUTE_RESOLVED", "COMPATIBILITY_STARTED", "COMPATIBILITY_COMPLETED", "PLANNING_COMPLETED", "ATTEMPT_STARTED", "ADMISSION_COMPLETED", "UPSTREAM_DISPATCHED", "COMPLETE"} {
 		if counts[phase] != 1 {
 			t.Fatalf("phase %s count=%d", phase, counts[phase])
 		}

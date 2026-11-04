@@ -580,6 +580,7 @@ func (u Usage) BillableTokens() int64 {
 
 // Response is a complete non-streaming canonical response.
 type Response struct {
+	UsageState           string // known | partial | unknown; independent of numeric zero
 	Content              []Block
 	FinishReason         string // canonical: "stop", "tool_call", "length"
 	Usage                Usage
@@ -639,6 +640,7 @@ type NativeSSEFrame struct {
 // StreamEvent is the canonical streaming unit. Adapters translate both ways.
 // Field relevance depends on Kind; unused fields stay zero.
 type StreamEvent struct {
+	UsageState           string
 	Model                string // upstream metadata; terminal values override earlier observations
 	ServiceTier          string
 	Kind                 EventKind

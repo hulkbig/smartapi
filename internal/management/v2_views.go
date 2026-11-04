@@ -939,6 +939,8 @@ func (s *Server) handleV2Requests(w http.ResponseWriter, r *http.Request) {
 	filter.ReportError = r.URL.Query().Get("report_error")
 	filter.ConnectionID = r.URL.Query().Get("connection")
 	filter.ConversationID = r.URL.Query().Get("conversation_id")
+	filter.SessionID = r.URL.Query().Get("session_id")
+	filter.CallerIdentityID = r.URL.Query().Get("caller_id")
 	filter.Outcome = domain.RequestOutcome(strings.ToUpper(r.URL.Query().Get("outcome")))
 	filter.Status = domain.RequestStatus(strings.ToLower(r.URL.Query().Get("status")))
 	filter.Model = r.URL.Query().Get("model")
@@ -946,22 +948,18 @@ func (s *Server) handleV2Requests(w http.ResponseWriter, r *http.Request) {
 	if value, parseErr := strconv.ParseInt(r.URL.Query().Get("runtime_revision"), 10, 64); parseErr == nil && value > 0 {
 		filter.RuntimeRevision = value
 	}
-	rows, total, err := s.deps.Ledger.QueryRequests(filter)
+	page, err := s.deps.Ledger.QueryObservedRequests(filter)
 	if err != nil {
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	items := make([]map[string]any, 0, len(rows))
-	for i := range rows {
-		conversationID := ""
-		if trace, traceErr := s.deps.Ledger.QueryTrace(rows[i].ID); traceErr == nil && trace != nil {
-			conversationID = trace.ConversationID
-		}
-		item := v2RequestSummary(&rows[i], conversationID)
-		s.addReferencePricing(item, &rows[i])
+	items := make([]map[string]any, 0, len(page.Requests))
+	for i := range page.Requests {
+		item := v2ObservedRequestSummary(&page.Requests[i], page.Observations[page.Requests[i].ID])
+		s.addReferencePricing(item, &page.Requests[i])
 		items = append(items, item)
 	}
-	writeMgmtJSON(w, http.StatusOK, map[string]any{"total": total, "requests": items})
+	writeMgmtJSON(w, http.StatusOK, map[string]any{"as_of": page.AsOf, "total": page.Total, "requests": items})
 }
 
 func v2RequestSummary(record *domain.RequestRecord, conversationID string) map[string]any {
@@ -995,29 +993,21 @@ func v2RequestSummary(record *domain.RequestRecord, conversationID string) map[s
 }
 
 func (s *Server) handleV2RequestDetail(w http.ResponseWriter, r *http.Request) {
-	record, err := s.deps.Ledger.QueryRequest(r.PathValue("id"))
+	bundle, err := s.deps.Ledger.QueryRequestObservationBundle(r.PathValue("id"))
 	if err != nil {
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if record == nil {
+	if bundle.Request == nil {
 		writeMgmtErr(w, http.StatusNotFound, "request not found")
 		return
 	}
-	attempts, err := s.deps.Ledger.QueryAttempts(record.ID)
-	if err != nil {
-		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	trace, err := s.deps.Ledger.QueryTrace(record.ID)
-	if err != nil {
-		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	record, attempts, trace := bundle.Request, bundle.Attempts, bundle.Trace
 	snap := s.deps.Scheduler.Snapshot()
 	attemptViews := make([]map[string]any, 0, len(attempts))
 	for _, attempt := range attempts {
 		view := map[string]any{
+			"usage_state": attempt.UsageState, "cost_state": attempt.CostState, "upstream_dispatched": attempt.UpstreamDispatched,
 			"sequence": attempt.Seq, "timestamp": attempt.Ts, "protocol": attempt.Protocol,
 			"provider_id": attempt.ProviderID, "connection_id": attempt.ConnectionID,
 			"upstream_model": attempt.Model, "status": attempt.Status, "failure": attempt.Failure,
@@ -1046,14 +1036,11 @@ func (s *Server) handleV2RequestDetail(w http.ResponseWriter, r *http.Request) {
 		events = append(events, trace.Events...)
 	}
 	response := map[string]any{
-		"client_request": v2RequestSummary(record, func() string {
-			if trace != nil {
-				return trace.ConversationID
-			}
-			return ""
-		}()),
+		"as_of":                  bundle.AsOf,
+		"client_request":         v2ObservedRequestSummary(record, bundle.Observation),
 		"attempts":               attemptViews,
 		"execution_trace_events": events,
+		"decision_updates":       publicDecisionUpdates(events),
 		"client_impact": map[string]any{
 			"outcome": record.Outcome, "visible_error": record.Status != domain.ReqSuccess && !record.CommitAt.IsZero(),
 			"recovery_added_latency_ms": record.RecoveryAddedLatencyMS,
@@ -1071,19 +1058,43 @@ func (s *Server) handleV2RequestDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	s.addReferencePricing(response["client_request"].(map[string]any), record)
 	if trace != nil {
+		response["route_snapshot"] = publicRouteSnapshot(trace)
+		response["trace_revision"] = trace.Revision
+		response["events_truncated"] = trace.EventsTruncated
 		response["required_capabilities"] = trace.RequiredCaps
 		exclusions := []map[string]any{}
 		seen := map[string]bool{}
-		appendExclusion := func(targetID domain.ResourceTargetID, reason string) {
+		appendExclusion := func(targetID domain.ResourceTargetID, reason string, snapshot *domain.CandidateRecord) {
 			key := string(targetID) + "\x00" + reason
+			if targetID == "" && snapshot != nil {
+				key = snapshot.CandidateID + "\x00" + reason
+			}
 			if seen[key] {
 				return
 			}
 			seen[key] = true
 			item := map[string]any{"reason": reason}
-			if snap != nil {
+			captured := false
+			candidates := trace.Candidates
+			if snapshot != nil {
+				candidates = []domain.CandidateRecord{*snapshot}
+			}
+			for _, candidate := range candidates {
+				if (snapshot != nil || (targetID != "" && candidate.Target == targetID)) && candidate.ProviderID != "" {
+					item["provider_id"] = candidate.ProviderID
+					item["connection_id"] = candidate.ConnectionID
+					item["upstream_model"] = candidate.UpstreamModel
+					item["provider_name"] = candidate.ProviderName
+					item["connection_name"] = candidate.ConnectionName
+					item["identity_source"] = "request_snapshot"
+					captured = true
+					break
+				}
+			}
+			if !captured && snap != nil {
 				if target := snap.Targets[targetID]; target != nil {
 					item["provider_id"] = target.ProviderID
+					item["identity_source"] = "current_config_fallback"
 					item["connection_id"] = target.ConnectionID
 					item["upstream_model"] = target.Model
 					egress := target.EgressProtocol(record.Protocol)
@@ -1096,7 +1107,7 @@ func (s *Server) handleV2RequestDetail(w http.ResponseWriter, r *http.Request) {
 		for _, candidate := range trace.Candidates {
 			if !candidate.Eligible {
 				previous := len(exclusions)
-				appendExclusion(candidate.Target, candidate.ExclusionReason)
+				appendExclusion(candidate.Target, candidate.ExclusionReason, &candidate)
 				if len(exclusions) > previous {
 					item := exclusions[len(exclusions)-1]
 					item["capability_status"] = candidate.CapabilityStatuses
@@ -1106,7 +1117,7 @@ func (s *Server) handleV2RequestDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, exclusion := range record.Exclusions {
-			appendExclusion(exclusion.Target, exclusion.Reason)
+			appendExclusion(exclusion.Target, exclusion.Reason, nil)
 		}
 		response["candidate_exclusions"] = exclusions
 	}
@@ -1155,24 +1166,27 @@ func (s *Server) handleV2SettingsGet(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeMgmtJSON(w, http.StatusOK, map[string]any{
-		"revision":                       revision,
-		"concurrency":                    file.Concurrency,
-		"debug_request_response":         s.deps.Ledger.DebugCaptureEnabled(),
-		"debug_capture_limit_bytes":      256 * 1024,
-		"debug_retention":                "same as request history",
-		"codex_usage_reset_auto":         autoReset,
-		"codex_usage_protection":         protection,
-		"scheduled_model_sync_enabled":   s.scheduledModelSyncEnabled(),
-		"auto_logical_model_limit":       file.LogicalModelAutoLimit(),
-		"codex_client_version":           file.CodexClientVersion,
-		"codex_auto_update":              file.CodexAutoUpdate,
-		"codex_release_channel":          file.EffectiveCodexReleaseChannel(),
-		"codex_auto_version":             file.CodexAutoVersion,
-		"codex_update_status":            s.codexClientUpdateStatus(file),
-		"codex_effective_client_version": file.EffectiveCodexClientVersion(),
-		"codex_default_client_version":   domain.CodexClientVersion,
-		"pricing_sync":                   s.pricing.Status(time.Now().UTC()),
-		"backup":                         s.backupSettings(),
+		"revision":                         revision,
+		"concurrency":                      file.Concurrency,
+		"debug_request_response":           s.deps.Ledger.DebugCaptureEnabled(),
+		"observability_content_mode":       s.deps.Ledger.ObservationContentMode(),
+		"observability_excerpt_characters": 160,
+		"observability_retention":          "same as request history",
+		"debug_capture_limit_bytes":        256 * 1024,
+		"debug_retention":                  "same as request history",
+		"codex_usage_reset_auto":           autoReset,
+		"codex_usage_protection":           protection,
+		"scheduled_model_sync_enabled":     s.scheduledModelSyncEnabled(),
+		"auto_logical_model_limit":         file.LogicalModelAutoLimit(),
+		"codex_client_version":             file.CodexClientVersion,
+		"codex_auto_update":                file.CodexAutoUpdate,
+		"codex_release_channel":            file.EffectiveCodexReleaseChannel(),
+		"codex_auto_version":               file.CodexAutoVersion,
+		"codex_update_status":              s.codexClientUpdateStatus(file),
+		"codex_effective_client_version":   file.EffectiveCodexClientVersion(),
+		"codex_default_client_version":     domain.CodexClientVersion,
+		"pricing_sync":                     s.pricing.Status(time.Now().UTC()),
+		"backup":                           s.backupSettings(),
 	})
 }
 
@@ -1188,12 +1202,17 @@ func (s *Server) handleV2SettingsPatch(w http.ResponseWriter, r *http.Request) {
 		ExpectedRevision         *int64                     `json:"expected_revision"`
 		Backup                   *backupPolicyPatch         `json:"backup"`
 		DebugRequestResponse     *bool                      `json:"debug_request_response"`
+		ObservabilityContentMode *string                    `json:"observability_content_mode"`
 		ScheduledModelSyncEnable *bool                      `json:"scheduled_model_sync_enabled"`
 		AutoLogicalModelLimit    *int                       `json:"auto_logical_model_limit"`
 		PricingSync              *pricingsync.Settings      `json:"pricing_sync"`
 	}
 	if err := decodeMgmtBody(r, &patch); err != nil {
 		writeMgmtErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if patch.ObservabilityContentMode != nil && *patch.ObservabilityContentMode != "excerpt" && *patch.ObservabilityContentMode != "metadata_only" {
+		writeMgmtErr(w, http.StatusBadRequest, "observability_content_mode must be metadata_only or excerpt")
 		return
 	}
 	if patch.UsageProtection != nil {
@@ -1251,7 +1270,7 @@ func (s *Server) handleV2SettingsPatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if patch.UsageProtection == nil && patch.AutomaticUsageReset == nil && patch.DebugRequestResponse == nil && patch.ScheduledModelSyncEnable == nil && patch.AutoLogicalModelLimit == nil && patch.PricingSync == nil && patch.Backup == nil && patch.Concurrency == nil {
+	if patch.UsageProtection == nil && patch.AutomaticUsageReset == nil && patch.DebugRequestResponse == nil && patch.ScheduledModelSyncEnable == nil && patch.AutoLogicalModelLimit == nil && patch.PricingSync == nil && patch.Backup == nil && patch.Concurrency == nil && patch.ObservabilityContentMode == nil {
 		writeMgmtErr(w, http.StatusBadRequest, "at least one settings field is required")
 		return
 	}
@@ -1269,6 +1288,12 @@ func (s *Server) handleV2SettingsPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.DebugRequestResponse != nil {
 		if err := s.deps.Ledger.SetDebugCapture(*patch.DebugRequestResponse); err != nil {
+			writeMgmtErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if patch.ObservabilityContentMode != nil {
+		if err := s.deps.Ledger.SetObservationContentMode(*patch.ObservabilityContentMode); err != nil {
 			writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}

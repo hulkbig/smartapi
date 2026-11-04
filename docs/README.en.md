@@ -12,6 +12,7 @@
 | Redeem expiring Codex reset credits | [AutoReset](guide/autoreset.en.md) |
 | Understand behavior and limitations | [Frequently asked questions](guide/faq.en.md) |
 | Diagnose a failed or stalled request | [Troubleshooting](guide/troubleshooting.en.md) |
+| Inspect conversation statistics and recorded routing | [Sessions and request explanations](session-observability.en.md) |
 | Back up, restore and upgrade | [Docker maintenance](guide/docker.en.md#back-up-and-restore) |
 | Import accounts and client keys | [sub2api / CLIProxyAPI import](guide/credential-import.en.md) |
 | Report a bug or propose a change | [Contributing](../CONTRIBUTING.en.md) |

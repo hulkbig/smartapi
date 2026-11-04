@@ -199,13 +199,14 @@ func planV2(w *world, logical *domain.LogicalModel, route domain.RouteSpec, ingr
 			if target == nil || target.ProviderID != step.ProviderID || target.Model != step.UpstreamModel {
 				continue
 			}
-			record := domain.CandidateRecord{Target: id, Tier: tier}
+			record := candidateSnapshot(w, target, tier, routeIndex+1, ingress)
 			record.CapabilityStatuses = target.CapabilityStatusesFor(target.EgressProtocol(ingress))
 			if verification, ok := w.capabilityVerifications[id]; ok {
 				record.CapabilityVerificationError = verification.Error
 				record.CapabilityProbeRequests = verification.Probes
 			}
-			reason := v2EligibilityReason(w, target, ingress, required, state.Get(id), connectionStates[target.ConnectionID], state.Now)
+			reason, conditions := assessV2Eligibility(w, target, ingress, required, state.Get(id), connectionStates[target.ConnectionID], state.Now)
+			record.Conditions = conditions
 			var assessment compatAssessment
 			if reason == "" {
 				assessment = compat.assess(id)
@@ -215,6 +216,13 @@ func planV2(w *world, logical *domain.LogicalModel, route domain.RouteSpec, ingr
 				if assessment.blocked {
 					reason = assessment.reason
 				}
+				result := "pass"
+				if assessment.blocked {
+					result = "fail"
+				}
+				record.Conditions = append(record.Conditions, domain.CandidateCondition{Code: "protocol_compatibility", Result: result, Reason: assessment.reason, ObservedAt: state.Now, Source: "planner"})
+			} else {
+				record.Conditions = append(record.Conditions, domain.CandidateCondition{Code: "protocol_compatibility", Result: "not_evaluated", ObservedAt: state.Now, Source: "planner"})
 			}
 			if reason != "" {
 				record.ExclusionReason = reason
@@ -352,22 +360,60 @@ func applyAffinity(result *policy.PlanResult, snap *domain.CompiledSnapshot, bin
 
 func v2EligibilityReason(w *world, target *domain.CompiledTarget, ingress domain.Protocol, required domain.Requirements,
 	targetState *domain.TargetState, connection domain.ConnectionState, now time.Time) string {
+	reason, _ := assessV2Eligibility(w, target, ingress, required, targetState, connection, now)
+	return reason
+}
+
+func assessV2Eligibility(w *world, target *domain.CompiledTarget, ingress domain.Protocol, required domain.Requirements,
+	targetState *domain.TargetState, connection domain.ConnectionState, now time.Time) (string, []domain.CandidateCondition) {
+	conditions := []domain.CandidateCondition{}
+	for _, code := range []string{"provider_enabled", "connection_enabled", "credential_available", "authentication", "reachability", "connection_cooldown", "quota", "capabilities", "circuit_breaker", "model_cooldown"} {
+		conditions = append(conditions, domain.CandidateCondition{Code: code, Result: "not_evaluated", ObservedAt: now, Source: "planner"})
+	}
+	pass := func(code string) {
+		for i := range conditions {
+			if conditions[i].Code == code {
+				conditions[i].Result = "pass"
+			}
+		}
+	}
+	fail := func(code, reason string) (string, []domain.CandidateCondition) {
+		for i := range conditions {
+			if conditions[i].Code == code {
+				conditions[i].Result = "fail"
+				conditions[i].Reason = reason
+			}
+		}
+		return reason, conditions
+	}
+
 	provider := w.snap.Providers[target.ProviderID]
 	if provider == nil || !provider.Enabled {
-		return "provider disabled"
+		return fail("provider_enabled", "provider disabled")
 	}
+	pass("provider_enabled")
 	configured := w.snap.Connections[target.ConnectionID]
 	if configured == nil || !configured.Enabled || !connection.Enabled || target.Disabled {
-		return "connection disabled"
+		return fail("connection_enabled", "connection disabled")
 	}
+	pass("connection_enabled")
 	if w.callers[target.ID] == nil {
-		return "connection credential unavailable"
+		return fail("credential_available", "connection credential unavailable")
 	}
+	pass("credential_available")
 	if connection.Auth == domain.ConnectionAuthError {
-		return "connection authentication error"
+		return fail("authentication", "connection authentication error")
+	}
+	pass("authentication")
+	if connection.Auth != domain.ConnectionAuthUsable {
+		conditions[3].Result = "unknown"
 	}
 	if connection.Reachability == domain.ConnectionOffline {
-		return "connection offline"
+		return fail("reachability", "connection offline")
+	}
+	pass("reachability")
+	if connection.Reachability != domain.ConnectionReachable {
+		conditions[4].Result = "unknown"
 	}
 	concurrency := configured.Concurrency
 	if concurrency == nil {
@@ -380,12 +426,17 @@ func v2EligibilityReason(w *world, target *domain.CompiledTarget, ingress domain
 	// can wait out its cooldown. Fail-fast policies exclude it here and let
 	// route fallback proceed without starting an upstream attempt.
 	if connection.CoolingUntil.After(now) && !concurrency.QueuesOnThrottle() {
-		return fmt.Sprintf("connection cooling until %s", connection.CoolingUntil.Format(time.RFC3339))
+		return fail("connection_cooldown", fmt.Sprintf("connection cooling until %s", connection.CoolingUntil.Format(time.RFC3339)))
 	}
+	pass("connection_cooldown")
 	for _, window := range connection.QuotaWindows {
 		if window.Availability == domain.QuotaExhausted && (window.ResetAt.IsZero() || window.ResetAt.After(now)) {
-			return "connection quota exhausted"
+			return fail("quota", "connection quota exhausted")
 		}
+	}
+	pass("quota")
+	if len(connection.QuotaWindows) == 0 {
+		conditions[6].Result = "unknown"
 	}
 	capabilities := target.CapabilitiesFor(target.EgressProtocol(ingress))
 	if !capabilities.Satisfies(required) {
@@ -401,21 +452,24 @@ func v2EligibilityReason(w *world, target *domain.CompiledTarget, ingress domain
 		if len(unverified) > 0 {
 			reason += "; unverified: " + strings.Join(unverified, ", ")
 		}
-		return reason
+		return fail("capabilities", reason)
 	}
+	pass("capabilities")
 	if targetState.Breaker == domain.BreakerOpen {
-		return "connection model circuit breaker open"
+		return fail("circuit_breaker", "connection model circuit breaker open")
 	}
+	pass("circuit_breaker")
 	if targetState.CooldownUntil.After(now) {
 		queueableThrottle := targetState.LastFailure != nil &&
 			targetState.LastFailure.Type == domain.FailRateLimit &&
 			targetState.LastFailure.EffectiveScope() == domain.FailureScopeConnection &&
 			concurrency.QueuesOnThrottle()
 		if !queueableThrottle {
-			return fmt.Sprintf("connection model cooling until %s", targetState.CooldownUntil.Format(time.RFC3339))
+			return fail("model_cooldown", fmt.Sprintf("connection model cooling until %s", targetState.CooldownUntil.Format(time.RFC3339)))
 		}
 	}
-	return ""
+	pass("model_cooldown")
+	return "", conditions
 }
 
 func v2CapabilityMismatchReason(capabilities domain.Capabilities, required domain.Requirements) string {

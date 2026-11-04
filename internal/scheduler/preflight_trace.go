@@ -65,7 +65,7 @@ func (s *Scheduler) observePreflightPhase(ctx context.Context, event domain.Exec
 		}
 	}
 	trace.events = append(trace.events, event)
-	s.led.SetTrace(request.id, &domain.TraceRecord{Events: append([]domain.ExecutionTraceEvent(nil), trace.events...)})
+	s.led.SetTrace(request.id, &domain.TraceRecord{SchemaVersion: 1, Events: append([]domain.ExecutionTraceEvent(nil), trace.events...)})
 }
 
 // preflightTraceEvents seeds initialTraceEvents with observed times, rather

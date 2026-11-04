@@ -257,6 +257,9 @@ type RequestMeta struct {
 	BearerToken      string
 	ClientIP         string
 	AffinityEvidence []domain.AffinityEvidence
+	// ObservationEvidence retains conflicting header aliases for explanation
+	// without changing the established first-header routing affinity behavior.
+	ObservationEvidence []domain.AffinityEvidence
 	// CallerID is a trusted in-process identity override used by management
 	// simulation. Ingress adapters never populate it from client input.
 	CallerID string
@@ -366,6 +369,7 @@ type decision struct {
 	conversationStore     *conversation.Store
 	responseID            string
 	traceEvents           []domain.ExecutionTraceEvent
+	routeSnapshot         *domain.RouteSnapshot
 }
 
 func failf(t domain.FailureType, format string, args ...any) *domain.Failure {
@@ -454,7 +458,7 @@ func (s *Scheduler) decideWithWorld(ctx context.Context, w *world, rc *domain.Re
 		}
 		phases = append(phases, event)
 		if !dryRun {
-			s.led.SetTrace(reqID, &domain.TraceRecord{Events: append([]domain.ExecutionTraceEvent(nil), phases...)})
+			s.led.SetTrace(reqID, &domain.TraceRecord{SchemaVersion: 1, Events: append([]domain.ExecutionTraceEvent(nil), phases...)})
 		}
 	}
 	planningCompleted := false
@@ -462,6 +466,7 @@ func (s *Scheduler) decideWithWorld(ctx context.Context, w *world, rc *domain.Re
 		initial := domain.RequestRecord{ID: reqID, Ts: now, Protocol: rc.Protocol, ModelRequested: rc.Model, LogicalModelID: rc.Model, Stream: rc.Stream, ClientIP: meta.ClientIP, Status: "received"}
 		if meta.requestID == "" {
 			s.led.BeginRequest(initial)
+			s.led.BeginObservation(domain.ObservationInput{RequestID: reqID, At: now, Protocol: rc.Protocol})
 		} else {
 			s.led.UpdateRequest(reqID, func(r *domain.RequestRecord) { *r = initial })
 		}
@@ -519,6 +524,9 @@ func (s *Scheduler) decideWithWorld(ctx context.Context, w *world, rc *domain.Re
 	}
 	if !dryRun {
 		s.led.UpdateRequest(reqID, func(r *domain.RequestRecord) { r.ConsumerKey = ck.Identity.Name; r.APIKeySecretID = matchedSecretID })
+		root := rc.Protocol == domain.ProtocolOpenAIResponses && (rc.Lineage == nil || (rc.Lineage.ConversationID == "" && rc.Lineage.PreviousResponseID == ""))
+		s.led.BeginObservation(domain.ObservationInput{RequestID: reqID, At: now, CallerIdentityID: ck.Identity.ID, Protocol: rc.Protocol, Evidence: observationEvidence(meta, rc), ResponsesRoot: root})
+		s.led.CaptureRequestExcerpt(reqID, rc)
 	}
 	if !ck.Identity.Allows(rc.Model, rc.Protocol, now) {
 		failure := failf(domain.FailAuth, "API key is expired, revoked, or outside its model/protocol scope")
@@ -813,6 +821,7 @@ func (s *Scheduler) decideWithWorld(ctx context.Context, w *world, rc *domain.Re
 		},
 	}
 	if useV2 {
+		d.routeSnapshot = captureRouteSnapshot(w, selectedV2.Route, plan, st.Now)
 		d.rec.LogicalModelID = logical.ID
 		d.rec.RouteFingerprint = routeFingerprint(selectedV2.Route)
 		if plan != nil && len(plan.OrderTierPolicyIndexes) > 0 && plan.OrderTierPolicyIndexes[0] > 0 {
@@ -822,6 +831,9 @@ func (s *Scheduler) decideWithWorld(ctx context.Context, w *world, rc *domain.Re
 	d.traceEvents = initialTraceEvents(d, phases)
 	if useV2 && rc.Protocol == domain.ProtocolOpenAIResponses {
 		d.responseID = conversation.NewID("resp_smart_")
+		if !dryRun {
+			s.led.RegisterObservationLineage(reqID, d.responseID, "")
+		}
 	}
 	if !dryRun {
 		s.led.UpdateRequest(d.rec.ID, func(r *domain.RequestRecord) { *r = d.rec; r.Status = "received" })
@@ -884,6 +896,8 @@ func (s *Scheduler) decideWithWorld(ctx context.Context, w *world, rc *domain.Re
 	}
 
 	trace := &domain.TraceRecord{
+		SchemaVersion:         1,
+		RouteSnapshot:         d.routeSnapshot,
 		PolicyName:            polName,
 		PolicyVersion:         polVersion,
 		PolicyHash:            polHash,
@@ -1008,6 +1022,8 @@ func classifyV2NoCandidate(exclusions []domain.ExclusionRecord) domain.FailureTy
 func (s *Scheduler) finish(d *decision, status domain.RequestStatus, f *domain.Failure, ex *execution) {
 	defer s.clearActiveTraffic(d.rec.ID)
 	trace := &domain.TraceRecord{
+		SchemaVersion:         1,
+		RouteSnapshot:         d.routeSnapshot,
 		PolicyName:            d.polName,
 		PolicyVersion:         d.polVersion,
 		PolicyHash:            d.polHash,
@@ -1044,6 +1060,7 @@ func (s *Scheduler) finish(d *decision, status domain.RequestStatus, f *domain.F
 	d.addTrace(domain.TraceOutput, "COMPLETE", nil, ex, nav{}, "")
 	trace.Events = append([]domain.ExecutionTraceEvent(nil), d.traceEvents...)
 	s.led.SetTrace(d.rec.ID, trace)
+	s.led.RegisterObservationLineage(d.rec.ID, d.responseID, conversationIDOf(d.conversation))
 	if d.debugCapture {
 		payload, truncated := responseDebugPayload(status, f, ex)
 		s.led.CaptureDebugResponse(d.rec.ID, payload, truncated)
@@ -1222,7 +1239,7 @@ func (d *decision) addTrace(category domain.TraceCategory, typ string,
 	if ex != nil {
 		event.Attempt = ex.seq
 		switch typ {
-		case "ATTEMPT_STARTED", "CONVERSATION_NATIVE", "CONVERSATION_REHYDRATING", "ADMISSION_COMPLETED", "UPSTREAM_FIRST_EVENT":
+		case "ATTEMPT_STARTED", "CONVERSATION_NATIVE", "CONVERSATION_REHYDRATING", "ADMISSION_COMPLETED", "ADMISSION_FAILED", "UPSTREAM_DISPATCHED", "UPSTREAM_FIRST_EVENT":
 			event.Attempt++ // seq counts completed attempts, not the one in flight.
 		}
 		event.ContinuityMode = ex.continuity
@@ -1237,12 +1254,17 @@ func (d *decision) addTrace(category domain.TraceCategory, typ string,
 		event.UpstreamModel = target.Model
 	}
 	d.traceEvents = append(d.traceEvents, event)
+	if len(d.traceEvents) > 512 {
+		copy(d.traceEvents[128:], d.traceEvents[129:])
+		d.traceEvents = d.traceEvents[:512]
+	}
 	if d.publishTrace != nil {
 		d.publishTrace()
 	}
 }
 
 func (d *decision) traceAttemptStarted(target *domain.CompiledTarget, ex *execution, position nav) {
+	ex.attemptPosition = position
 	d.addTrace(domain.TraceRecovery, "ATTEMPT_STARTED", target, ex, position, "")
 	switch ex.continuity {
 	case domain.ContinuityNative:
@@ -1256,11 +1278,14 @@ func (d *decision) traceAttemptStarted(target *domain.CompiledTarget, ex *execut
 // execution state shared by both modes
 
 type execution struct {
-	d            *decision
-	start        time.Time
-	attemptStart time.Time
-	seq          int
-	lastTarget   domain.ResourceTargetID
+	d                 *decision
+	start             time.Time
+	attemptStart      time.Time
+	seq               int
+	attemptDispatched bool
+	attemptUsageState string
+	attemptPosition   nav
+	lastTarget        domain.ResourceTargetID
 	// protocol is the wire format of the attempt in flight — for channel-
 	// expanded targets this varies per request (native passthrough or least-
 	// lossy native), so the ledger records what actually hit upstream.
@@ -1474,6 +1499,7 @@ func (ex *execution) recordAttempt(target domain.ResourceTargetID, status domain
 		return
 	}
 	ex.seq++
+	defer func() { ex.attemptDispatched = false; ex.attemptUsageState = "" }()
 	now := time.Now()
 	mult := 1.0
 	if t.Plan != nil {
@@ -1503,6 +1529,19 @@ func (ex *execution) recordAttempt(target domain.ResourceTargetID, status domain
 	ex.lastTarget = target
 	addUsage(&ex.upstreamUsage, u)
 	servingAttempt := status == domain.ReqSuccess || !ex.commitAt.IsZero()
+	usageState := ex.attemptUsageState
+	if usageState == "" {
+		usageState = "unknown"
+	}
+	if !ex.attemptDispatched {
+		usageState = "known"
+	}
+	costState := "unknown"
+	if !ex.attemptDispatched || (t.Plan != nil && (t.Plan.Kind == domain.PlanFree || t.Plan.Kind == domain.PlanSubscription)) {
+		costState = "known"
+	} else if card != nil {
+		costState = usageState
+	}
 	if servingAttempt {
 		addUsage(&ex.usage, u)
 		ex.servingCost += paidCash + sub
@@ -1517,6 +1556,7 @@ func (ex *execution) recordAttempt(target domain.ResourceTargetID, status domain
 	}
 
 	rec := domain.AttemptRecord{
+		UsageState: usageState, CostState: costState, UpstreamDispatched: ex.attemptDispatched, Serving: servingAttempt,
 		RequestID: d.rec.ID, Seq: ex.seq, Ts: now,
 		TargetID: target, ProviderID: t.ProviderID, ConnectionID: t.ConnectionID,
 		EndpointURL: func() string {
@@ -1558,17 +1598,22 @@ func (ex *execution) recordAttempt(target domain.ResourceTargetID, status domain
 		}(),
 		MultiplierRuleVersion: fmt.Sprintf("%s@%d", t.ID, d.w.snap.Version),
 	}
-	sched.led.AddAttempt(rec)
+	// Publish completion with the attempt row in one Ledger transaction.
+	// Other structural facts keep the ordinary live Trace publication path.
+	publish := d.publishTrace
+	d.publishTrace = nil
 	if status == domain.ReqSuccess {
-		d.addTrace(domain.TraceRecovery, "ATTEMPT_SUCCEEDED", t, ex, nav{}, "")
+		d.addTrace(domain.TraceRecovery, "ATTEMPT_SUCCEEDED", t, ex, ex.attemptPosition, "")
 	} else {
-		d.addTrace(domain.TraceRecovery, "ATTEMPT_FAILED", t, ex, nav{}, failureMessage(f))
+		d.addTrace(domain.TraceRecovery, "ATTEMPT_FAILED", t, ex, ex.attemptPosition, failureMessage(f))
 		if f != nil {
 			last := &d.traceEvents[len(d.traceEvents)-1]
 			last.FailureType = f.Type
 			last.FailureScope = f.EffectiveScope()
 		}
 	}
+	d.publishTrace = publish
+	sched.led.AddAttemptObservation(rec, d.traceEvents[len(d.traceEvents)-1])
 
 	if status == domain.ReqSuccess {
 		sched.manager.RecordSuccessMulti(target, latencyMS, ttftMS, u, cash, quotas, now)
@@ -1973,6 +2018,7 @@ func (s *Scheduler) executeInvoke(ctx context.Context, rc *domain.RequestContrac
 
 		release, admitFailure := s.manager.Admit(ctx, id)
 		if admitFailure != nil {
+			d.addTrace(domain.TraceRecovery, "ADMISSION_FAILED", t, ex, n, failureMessage(admitFailure))
 			ex.recordAttempt(id, domain.ReqFailed, admitFailure, 0, 0, domain.Usage{}, s)
 			if ctx.Err() != nil {
 				s.finish(d, domain.ReqCanceled, failf(domain.FailClientCancel, "client canceled"), ex)
@@ -1992,6 +2038,8 @@ func (s *Scheduler) executeInvoke(ctx context.Context, rc *domain.RequestContrac
 		attemptStart := time.Now()
 		ex.attemptStart = attemptStart
 		wait := newFirstOutputWait(ex.observeServiceTier(ctx, t), d.firstOutputTimeout())
+		d.addTrace(domain.TraceRecovery, "UPSTREAM_DISPATCHED", t, ex, n, "")
+		ex.attemptDispatched = true
 		resp, f := caller.Invoke(wait.ctx, c)
 		wait.close()
 		if ctx.Err() != nil {
@@ -2001,6 +2049,7 @@ func (s *Scheduler) executeInvoke(ctx context.Context, rc *domain.RequestContrac
 			d.addTrace(domain.TraceOutput, "FIRST_OUTPUT_TIMEOUT", t, ex, n, f.Message)
 		}
 		if resp != nil {
+			ex.attemptUsageState = resp.UsageState
 			ex.captureResponseMetadata(resp.Model, resp.ServiceTier)
 			ex.terminalServiceTier = resp.ServiceTier
 		}
@@ -2151,6 +2200,7 @@ func (s *Scheduler) executeStream(ctx context.Context, rc *domain.RequestContrac
 
 			release, admitFailure := s.manager.Admit(ctx, id)
 			if admitFailure != nil {
+				d.addTrace(domain.TraceRecovery, "ADMISSION_FAILED", t, ex, n, failureMessage(admitFailure))
 				ex.recordAttempt(id, domain.ReqFailed, admitFailure, 0, 0, domain.Usage{}, s)
 				if ctx.Err() != nil {
 					s.finish(d, domain.ReqCanceled, failf(domain.FailClientCancel, "client canceled"), ex)
@@ -2172,6 +2222,8 @@ func (s *Scheduler) executeStream(ctx context.Context, rc *domain.RequestContrac
 			attemptStart := time.Now()
 			ex.attemptStart = attemptStart
 			wait := newFirstOutputWait(ex.observeServiceTier(ctx, t), d.firstOutputTimeout())
+			d.addTrace(domain.TraceRecovery, "UPSTREAM_DISPATCHED", t, ex, n, "")
+			ex.attemptDispatched = true
 			ch, upstreamCancel, f := caller.Stream(wait.ctx, c2)
 			cancel := func() {
 				wait.close()
@@ -2264,6 +2316,9 @@ func (s *Scheduler) executeStream(ctx context.Context, rc *domain.RequestContrac
 			}
 			firstUpstreamEvent := true
 			for ev := range ch {
+				if ev.Usage != nil {
+					ex.attemptUsageState = ev.UsageState
+				}
 				if firstUpstreamEvent {
 					d.addTrace(domain.TraceOutput, "UPSTREAM_FIRST_EVENT", t, ex, n, "")
 					firstUpstreamEvent = false
@@ -2416,6 +2471,9 @@ func (s *Scheduler) executeStream(ctx context.Context, rc *domain.RequestContrac
 				if consumeDone {
 					// drain any trailing events (e.g. usage after finish)
 					for e2 := range ch {
+						if e2.Usage != nil {
+							ex.attemptUsageState = e2.UsageState
+						}
 						ex.captureResponseMetadata(e2.Model, e2.ServiceTier)
 						if e2.Kind == domain.EvEnd {
 							ex.terminalServiceTier = e2.ServiceTier

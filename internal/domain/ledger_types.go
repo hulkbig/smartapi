@@ -24,6 +24,10 @@ const (
 
 // AttemptRecord is one real upstream call (F-P0-20). Immutable once written.
 type AttemptRecord struct {
+	UsageState          string           `json:"usage_state,omitempty"`
+	CostState           string           `json:"cost_state,omitempty"`
+	UpstreamDispatched  bool             `json:"upstream_dispatched"`
+	Serving             bool             `json:"serving"`
 	RequestID           string           `json:"request_id"`
 	Seq                 int              `json:"seq"`
 	Ts                  time.Time        `json:"ts"`
@@ -69,15 +73,24 @@ type ExclusionRecord struct {
 
 // CandidateRecord is one candidate's evaluation outcome in the trace.
 type CandidateRecord struct {
-	Target                      ResourceTargetID   `json:"target"`
-	Tier                        string             `json:"tier"`
-	Eligible                    bool               `json:"eligible"`
-	ExclusionReason             string             `json:"exclusion_reason,omitempty"`
-	Rank                        int                `json:"rank"` // 1-based within tier; 0 if excluded
-	Scores                      map[string]float64 `json:"scores,omitempty"`
-	CapabilityStatuses          CapabilityStatuses `json:"capability_status,omitempty"`
-	CapabilityVerificationError string             `json:"capability_verification_error,omitempty"`
-	CapabilityProbeRequests     int                `json:"capability_probe_requests,omitempty"`
+	CandidateID                 string               `json:"candidate_id,omitempty"`
+	RouteStep                   int                  `json:"route_step,omitempty"`
+	ProviderID                  string               `json:"provider_id,omitempty"`
+	ProviderName                string               `json:"provider_name,omitempty"`
+	ConnectionID                string               `json:"connection_id,omitempty"`
+	ConnectionName              string               `json:"connection_name,omitempty"`
+	UpstreamModel               string               `json:"upstream_model,omitempty"`
+	Protocol                    Protocol             `json:"protocol,omitempty"`
+	Conditions                  []CandidateCondition `json:"conditions,omitempty"`
+	Target                      ResourceTargetID     `json:"target"`
+	Tier                        string               `json:"tier"`
+	Eligible                    bool                 `json:"eligible"`
+	ExclusionReason             string               `json:"exclusion_reason,omitempty"`
+	Rank                        int                  `json:"rank"` // 1-based within tier; 0 if excluded
+	Scores                      map[string]float64   `json:"scores,omitempty"`
+	CapabilityStatuses          CapabilityStatuses   `json:"capability_status,omitempty"`
+	CapabilityVerificationError string               `json:"capability_verification_error,omitempty"`
+	CapabilityProbeRequests     int                  `json:"capability_probe_requests,omitempty"`
 }
 
 // RecoveryEvent documents one typed recovery transition.
@@ -104,6 +117,7 @@ const (
 // Provider/Connection fields are public V2 resource identities; the private
 // ResourceTarget leaf is intentionally absent.
 type ExecutionTraceEvent struct {
+	Seq            uint64         `json:"seq,omitempty"`
 	At             time.Time      `json:"at"`
 	Category       TraceCategory  `json:"category"`
 	Type           string         `json:"type"`
@@ -123,6 +137,10 @@ type ExecutionTraceEvent struct {
 
 // TraceRecord is the full Decision Trace (F-P0-21, PRD §14).
 type TraceRecord struct {
+	SchemaVersion         int                   `json:"schema_version,omitempty"`
+	Revision              uint64                `json:"revision,omitempty"`
+	RouteSnapshot         *RouteSnapshot        `json:"route_snapshot,omitempty"`
+	EventsTruncated       int                   `json:"events_truncated,omitempty"`
 	PolicyName            string                `json:"policy_name"`
 	PolicyVersion         int64                 `json:"policy_version"`
 	PolicyHash            string                `json:"policy_hash,omitempty"`
@@ -217,29 +235,32 @@ type RequestRecord struct {
 
 // LogFilter is the query input for GET /v0/management/console/logs (F-P0-22).
 type LogFilter struct {
-	From                  time.Time
-	To                    time.Time
-	RequestID             string
-	Search                string
-	ConsumerKey           string
-	ProviderID            string
-	ParticipatingProvider string
-	LogicalModel          string
-	AttemptStatus         string
-	AttemptFailureType    string
-	ReportError           string
-	ConnectionID          string
-	ConversationID        string
-	Outcome               RequestOutcome
-	Alias                 string
-	Objective             string
-	Target                string // substring match on selected target
-	Model                 string // substring match on selected model
-	Status                RequestStatus
-	FailureType           FailureType
-	PolicyName            string
-	PolicyVersion         int64
-	RuntimeRevision       int64
-	Limit                 int
-	Offset                int
+	IncludePendingParticipation bool
+	SessionID                   string
+	CallerIdentityID            string
+	From                        time.Time
+	To                          time.Time
+	RequestID                   string
+	Search                      string
+	ConsumerKey                 string
+	ProviderID                  string
+	ParticipatingProvider       string
+	LogicalModel                string
+	AttemptStatus               string
+	AttemptFailureType          string
+	ReportError                 string
+	ConnectionID                string
+	ConversationID              string
+	Outcome                     RequestOutcome
+	Alias                       string
+	Objective                   string
+	Target                      string // substring match on selected target
+	Model                       string // substring match on selected model
+	Status                      RequestStatus
+	FailureType                 FailureType
+	PolicyName                  string
+	PolicyVersion               int64
+	RuntimeRevision             int64
+	Limit                       int
+	Offset                      int
 }

@@ -48,17 +48,23 @@ type Ledger struct {
 	requests   map[string]*pendingRequest   // requestID -> accumulating record
 	liveWrites map[string]*pendingLiveWrite // coalesced queued snapshots, protected by mu
 
-	debugCapture atomic.Bool
+	debugCapture   atomic.Bool
+	excerptCapture atomic.Bool
 }
 
 type pendingRequest struct {
-	rec              domain.RequestRecord
-	attempt          domain.AttemptRecord // last attempt (for failure propagation)
-	trace            *domain.TraceRecord  // ledger-owned immutable snapshot
-	ingress          bool
-	awaitingDelivery bool
-	finished         bool
-	firstOutput      bool
+	rec                        domain.RequestRecord
+	attempt                    domain.AttemptRecord // last attempt (for failure propagation)
+	trace                      *domain.TraceRecord  // ledger-owned immutable snapshot
+	ingress                    bool
+	awaitingDelivery           bool
+	finished                   bool
+	firstOutput                bool
+	observationSeq             uint64
+	observationRevision        uint64
+	observationEvents          []domain.ExecutionTraceEvent
+	observationEventKeys       map[[32]byte]uint64
+	observationEventsTruncated int
 }
 
 // execer abstracts *sql.DB and *sql.Tx so batched writes can run inside one
@@ -347,7 +353,7 @@ func (l *Ledger) migrate() error {
 		return fmt.Errorf("load runtime settings: %w", err)
 	}
 	l.debugCapture.Store(debugValue == "true")
-	return nil
+	return l.migrateObservations()
 }
 
 func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
@@ -505,6 +511,9 @@ func (l *Ledger) PurgeOlderThan(cutoff time.Time) (int64, error) {
 		return removed, fmt.Errorf("purge requests: %w", err)
 	}
 	// Reclaim freed pages incrementally (bounded, unlike full VACUUM).
+	if err := l.purgeObservations(cutoff); err != nil {
+		return removed, fmt.Errorf("purge observations: %w", err)
+	}
 	_, _ = l.db.Exec(`PRAGMA incremental_vacuum(1024)`)
 	return removed, nil
 }
@@ -572,7 +581,45 @@ func (l *Ledger) AddAttempt(a domain.AttemptRecord) {
 		p.attempt = a
 	}
 	l.mu.Unlock()
-	l.enqueue(func(db execer) error { return insertAttempt(db, &a) })
+	l.enqueue(atomicJob(func(db queryExecer) error {
+		if err := insertAttempt(db, &a); err != nil {
+			return err
+		}
+		return updateObservationUsage(db, a.RequestID)
+	}))
+}
+
+// AddAttemptObservation commits the attempt, completion fact, live projection
+// and usage coverage together. A reader cannot see a failed attempt while its
+// last-dispatched Provider is still marked active.
+func (l *Ledger) AddAttemptObservation(a domain.AttemptRecord, event domain.ExecutionTraceEvent) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	p := l.requests[a.RequestID]
+	if p == nil {
+		l.enqueue(atomicJob(func(db queryExecer) error {
+			if err := insertAttempt(db, &a); err != nil {
+				return err
+			}
+			return updateObservationUsage(db, a.RequestID)
+		}))
+		return
+	}
+	p.attempt = a
+	l.appendObservationEventLocked(p, event)
+	record, trace := liveRequestRecord(p), p.trace
+	l.enqueue(atomicJob(func(db queryExecer) error {
+		if err := insertAttempt(db, &a); err != nil {
+			return err
+		}
+		if err := insertRequestRow(db, &record, "live_requests"); err != nil {
+			return err
+		}
+		if err := persistObservationTrace(db, &record, trace); err != nil {
+			return err
+		}
+		return updateObservationUsage(db, a.RequestID)
+	}))
 }
 
 // SetTrace publishes an owned snapshot of the decision trace. The caller must
@@ -583,7 +630,13 @@ func (l *Ledger) SetTrace(requestID string, tr *domain.TraceRecord) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if p, ok := l.requests[requestID]; ok {
+		if snapshot != nil && snapshot.SchemaVersion >= 1 {
+			mergeObservationTraceLocked(p, snapshot)
+		}
 		p.trace = snapshot
+		if snapshot != nil && snapshot.SchemaVersion >= 1 {
+			l.persistLiveRequest(p)
+		}
 	}
 }
 
@@ -598,6 +651,18 @@ func cloneTraceRecord(tr *domain.TraceRecord) *domain.TraceRecord {
 	copy.Candidates = slices.Clone(tr.Candidates)
 	for i := range copy.Candidates {
 		copy.Candidates[i].Scores = maps.Clone(tr.Candidates[i].Scores)
+		copy.Candidates[i].Conditions = slices.Clone(tr.Candidates[i].Conditions)
+		for j := range copy.Candidates[i].Conditions {
+			if value := copy.Candidates[i].Conditions[j].Value; value != nil {
+				v := *value
+				copy.Candidates[i].Conditions[j].Value = &v
+			}
+		}
+	}
+	if tr.RouteSnapshot != nil {
+		snapshot := *tr.RouteSnapshot
+		snapshot.Steps = slices.Clone(tr.RouteSnapshot.Steps)
+		copy.RouteSnapshot = &snapshot
 	}
 	copy.ExecutionOrder = slices.Clone(tr.ExecutionOrder)
 	copy.RecoveryEvents = slices.Clone(tr.RecoveryEvents)
@@ -640,20 +705,23 @@ func (l *Ledger) finishRequestLocked(id string, p *pendingRequest) {
 	trace := p.trace
 	delete(l.requests, id)
 
-	l.enqueue(func(db execer) error {
+	l.enqueue(atomicJob(func(db queryExecer) error {
 		if err := insertRequest(db, &rec); err != nil {
 			return err
 		}
+		if trace != nil {
+			if trace.SchemaVersion < 1 {
+				if err := insertTrace(db, id, rec.Ts, trace); err != nil {
+					return err
+				}
+			}
+			if err := persistObservationTrace(db, &rec, trace); err != nil {
+				return err
+			}
+		}
 		_, err := db.Exec("DELETE FROM live_requests WHERE id = ?", rec.ID)
 		return err
-	})
-	if trace != nil {
-		tr := *trace
-		// SetTrace owns this immutable snapshot, including its descendants.
-		// Trace ts mirrors the request ts so retention ages traces by when
-		// the request happened, not when the async writer flushed.
-		l.enqueue(func(db execer) error { return insertTrace(db, id, rec.Ts, &tr) })
-	}
+	}))
 }
 
 // Close flushes pending writes and closes the databases. Idempotent.
@@ -691,8 +759,9 @@ func insertAttempt(db execer, a *domain.AttemptRecord) error {
 		latency_ms, ttft_ms, input_tokens, output_tokens, cache_read_tokens,
 		cache_write_tokens, reasoning_tokens, multiplier, est_cash_cost,
 		quota_units, allocated_sub_cost, shadow_cost, rate_card_version,
-		quota_rule_version, multiplier_rule_version, service_tier, response_model, response_service_tier, cache_subset_of_input, service_tier_evidence
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		quota_rule_version, multiplier_rule_version, service_tier, response_model, response_service_tier, cache_subset_of_input, service_tier_evidence,
+		usage_state,cost_state,upstream_dispatched,serving
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.RequestID, a.Seq, a.Ts.UnixMilli(), string(a.TargetID), a.ProviderID, a.ConnectionID, a.EndpointURL,
 		string(a.Protocol), a.CredentialRef, a.Model, string(a.PlanKind),
 		string(a.Status), failType, failScope, failStatus, failMsg,
@@ -700,7 +769,7 @@ func insertAttempt(db execer, a *domain.AttemptRecord) error {
 		a.Usage.CacheReadTokens, a.Usage.CacheWriteTokens, a.Usage.ReasoningTokens,
 		a.Multiplier, a.EstCashCost, a.QuotaUnits, a.AllocatedSubCost,
 		a.ShadowCost, a.RateCardVersion, a.QuotaRuleVersion, a.MultiplierRuleVersion,
-		a.ServiceTier, a.ResponseModel, a.ResponseServiceTier, b2i(a.Usage.CacheSubsetOfInput), string(evidence))
+		a.ServiceTier, a.ResponseModel, a.ResponseServiceTier, b2i(a.Usage.CacheSubsetOfInput), string(evidence), a.UsageState, a.CostState, b2i(a.UpstreamDispatched), b2i(a.Serving))
 	return err
 }
 

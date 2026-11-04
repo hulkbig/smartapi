@@ -639,6 +639,7 @@ func (h *ResponsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !writeNativeResponse(w, res, domain.ProtocolOpenAIResponses) {
 		writeJSON(w, http.StatusOK, rsResponseFrom(res, res.Response))
 	}
+	captureCanonicalExcerpt(w, res.Response.Content)
 }
 
 // streamResponses pumps canonical events into Responses-API SSE events.

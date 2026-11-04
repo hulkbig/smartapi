@@ -8,7 +8,8 @@ import (
 
 // Keep open requests outside finalized billing and analytics cohorts.
 // Prefer the final row during handover; a request ID appears exactly once.
-const liveRequestsCTE = "WITH logical_requests AS (SELECT * FROM main.logical_requests UNION ALL SELECT * FROM live_requests WHERE id NOT IN (SELECT id FROM main.logical_requests)) "
+const liveRequestsSource = "(SELECT * FROM main.logical_requests UNION ALL SELECT * FROM live_requests WHERE id NOT IN (SELECT id FROM main.logical_requests)) "
+const liveRequestsCTE = "WITH logical_requests AS " + liveRequestsSource
 
 func (l *Ledger) openLiveRequests() error {
 	var schema string
@@ -50,6 +51,9 @@ func (l *Ledger) openLiveRequests() error {
 		record.FailureMsg = "runtime restarted before the request completed"
 		record.DurationMS = time.Since(record.Ts).Milliseconds()
 		if err := insertRequest(tx, &record); err != nil {
+			return err
+		}
+		if err := finalizeStrandedObservation(tx, &record); err != nil {
 			return err
 		}
 	}
@@ -98,6 +102,7 @@ func (l *Ledger) RecordFirstOutput(id string, at time.Time) {
 	if p := l.requests[id]; p != nil && !p.firstOutput {
 		p.firstOutput = true
 		p.rec.TTFTMS = max(1, at.Sub(p.rec.Ts).Milliseconds())
+		l.appendObservationEventLocked(p, domain.ExecutionTraceEvent{At: at, Category: domain.TraceOutput, Type: "CLIENT_FIRST_OUTPUT"})
 		l.persistLiveRequest(p)
 	}
 }
@@ -115,7 +120,10 @@ func liveRequestRecord(p *pendingRequest) domain.RequestRecord {
 	return record
 }
 
-type pendingLiveWrite struct{ record domain.RequestRecord }
+type pendingLiveWrite struct {
+	record domain.RequestRecord
+	trace  *domain.TraceRecord
+}
 
 // persistLiveRequest coalesces superseded snapshots while they are queued.
 // Full final records, attempts and traces are never coalesced or dropped.
@@ -126,25 +134,33 @@ func (l *Ledger) persistLiveRequest(p *pendingRequest) {
 	if l.liveWrites == nil {
 		l.liveWrites = make(map[string]*pendingLiveWrite)
 	}
-	if pending := l.liveWrites[record.ID]; pending != nil {
+	// Only metadata updates sharing the exact immutable trace may coalesce.
+	// A new trace must retain its queue position after observation/attempt jobs.
+	if pending := l.liveWrites[record.ID]; pending != nil && pending.trace == p.trace {
 		pending.record = record
+		pending.trace = p.trace
 		return
 	}
-	pending := &pendingLiveWrite{record: record}
+	pending := &pendingLiveWrite{record: record, trace: p.trace}
 	l.liveWrites[record.ID] = pending
-	// Freeze once when the serial writer reaches this job. Retain the frozen
-	// snapshot for transaction replay; a later update gets its own ordered job.
-	var frozen *domain.RequestRecord
-	l.enqueue(func(db execer) error {
+	// Freeze record and trace together once for transaction replay. A later
+	// update gets its own ordered job and cannot overwrite this snapshot.
+	var frozen *pendingLiveWrite
+	l.enqueue(atomicJob(func(db queryExecer) error {
 		if frozen == nil {
 			l.mu.Lock()
-			snapshot := pending.record
-			delete(l.liveWrites, snapshot.ID)
+			snapshot := *pending
+			if l.liveWrites[snapshot.record.ID] == pending {
+				delete(l.liveWrites, snapshot.record.ID)
+			}
 			l.mu.Unlock()
 			frozen = &snapshot
 		}
-		return insertRequestRow(db, frozen, "live_requests")
-	})
+		if err := insertRequestRow(db, &frozen.record, "live_requests"); err != nil {
+			return err
+		}
+		return persistObservationTrace(db, &frozen.record, frozen.trace)
+	}))
 }
 
 // LiveRequests returns copies from one lock-protected snapshot, including

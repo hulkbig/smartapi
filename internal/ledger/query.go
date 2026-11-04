@@ -152,7 +152,11 @@ func (l *Ledger) QueryRequestDebug(id string) (*domain.RequestDebugRecord, error
 
 // QueryAttempts returns all attempts for one logical request in seq order.
 func (l *Ledger) QueryAttempts(requestID string) ([]domain.AttemptRecord, error) {
-	rows, err := l.read.Query(`SELECT request_id, seq, ts, target_id, provider_id, connection_id, endpoint_url,
+	return queryAttempts(l.read, requestID)
+}
+
+func queryAttempts(db queryReader, requestID string) ([]domain.AttemptRecord, error) {
+	rows, err := db.Query(`SELECT request_id, seq, ts, target_id, provider_id, connection_id, endpoint_url,
 		protocol, credential_ref, model, plan_kind, status, failure_type, failure_scope,
 		failure_status, failure_msg, latency_ms, ttft_ms, input_tokens,
 		output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
@@ -161,7 +165,7 @@ func (l *Ledger) QueryAttempts(requestID string) ([]domain.AttemptRecord, error)
 		service_tier, response_model, response_service_tier,
 		COALESCE(cache_subset_of_input, COALESCE(NULLIF(protocol,''),
 		(SELECT lr.protocol FROM logical_requests lr WHERE lr.id=attempts.request_id),'') != 'anthropic'
-		AND input_tokens>=cache_read_tokens+cache_write_tokens), service_tier_evidence
+		AND input_tokens>=cache_read_tokens+cache_write_tokens), service_tier_evidence,usage_state,cost_state,upstream_dispatched,serving
 		FROM attempts WHERE request_id = ? ORDER BY seq ASC`, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("query attempts: %w", err)
@@ -183,7 +187,7 @@ func (l *Ledger) QueryAttempts(requestID string) ([]domain.AttemptRecord, error)
 			&a.Usage.CacheWriteTokens, &a.Usage.ReasoningTokens, &a.Multiplier,
 			&a.EstCashCost, &a.QuotaUnits, &a.AllocatedSubCost, &a.ShadowCost,
 			&a.RateCardVersion, &a.QuotaRuleVersion, &a.MultiplierRuleVersion,
-			&a.ServiceTier, &a.ResponseModel, &a.ResponseServiceTier, &a.Usage.CacheSubsetOfInput, &evidenceJSON); err != nil {
+			&a.ServiceTier, &a.ResponseModel, &a.ResponseServiceTier, &a.Usage.CacheSubsetOfInput, &evidenceJSON, &a.UsageState, &a.CostState, &a.UpstreamDispatched, &a.Serving); err != nil {
 			return nil, fmt.Errorf("scan attempt: %w", err)
 		}
 		a.Ts = time.UnixMilli(tsMilli)
@@ -1280,13 +1284,22 @@ func buildWhere(f domain.LogFilter) (string, []any) {
 	if f.RequestID != "" {
 		add("id = ?", f.RequestID)
 	}
+	if f.SessionID != "" {
+		add(`EXISTS(SELECT 1 FROM request_observations ro WHERE ro.request_id=logical_requests.id AND ro.session_id=?)`, f.SessionID)
+	}
+	if f.CallerIdentityID != "" {
+		add(`EXISTS(SELECT 1 FROM request_observations ro WHERE ro.request_id=logical_requests.id AND ro.caller_identity_id=?)`, f.CallerIdentityID)
+	}
 	if f.Search != "" {
 		like := "%" + f.Search + "%"
-		add(`(id LIKE ? OR consumer_key LIKE ? OR EXISTS (
+		add(`(id=? OR (NOT EXISTS(SELECT 1 FROM logical_requests exact_request WHERE exact_request.id=?) AND
+		(id LIKE ? OR consumer_key LIKE ? OR EXISTS (
 			SELECT 1 FROM decision_traces dt
 			WHERE dt.request_id = logical_requests.id
 			AND COALESCE(json_extract(dt.trace, '$.conversation_id'), '') LIKE ?
-		))`, like, like, like)
+		) OR EXISTS(SELECT 1 FROM request_observations ro WHERE ro.request_id=logical_requests.id AND
+		 (ro.session_id LIKE ? OR ro.client_kind LIKE ? OR json_extract(ro.observation,'$.content_preview.request_excerpt') LIKE ?
+		 OR json_extract(ro.observation,'$.content_preview.response_excerpt') LIKE ?)))))`, f.Search, f.Search, like, like, like, like, like, like, like)
 	}
 	if f.ConsumerKey != "" {
 		add("consumer_key = ?", f.ConsumerKey)
@@ -1312,7 +1325,13 @@ func buildWhere(f domain.LogFilter) (string, []any) {
 			cond += " AND pa.status!='success' AND COALESCE(NULLIF(pa.failure_type,''),NULLIF(pa.status,''),'unknown')=?"
 			params = append(params, f.AttemptFailureType)
 		}
-		add(cond+")", params...)
+		cond += ")"
+		if f.IncludePendingParticipation && f.ParticipatingProvider != "" && f.AttemptStatus == "" && f.AttemptFailureType == "" {
+			cond = "(" + cond + ` OR EXISTS(SELECT 1 FROM request_observations ro WHERE ro.request_id=logical_requests.id AND
+			 (ro.active_provider_id=? OR (ro.activity_phase='waiting' AND ro.selected_provider_id=?))))`
+			params = append(params, f.ParticipatingProvider, f.ParticipatingProvider)
+		}
+		add(cond, params...)
 	}
 	if f.ConnectionID != "" {
 		add("connection_id = ?", f.ConnectionID)

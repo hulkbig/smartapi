@@ -561,6 +561,7 @@ func (h *OpenAIChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !writeNativeResponse(w, res, domain.ProtocolOpenAIChat) {
 		writeJSON(w, http.StatusOK, chatResponseFrom(res, res.Response))
 	}
+	captureCanonicalExcerpt(w, res.Response.Content)
 }
 
 // streamChat pumps canonical events into OpenAI-style SSE chunks.

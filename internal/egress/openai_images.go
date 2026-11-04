@@ -185,6 +185,7 @@ func (o *OpenAIImages) Invoke(ctx context.Context, rc *domain.RequestContract) (
 		result.Model = envelope.Model
 	}
 	result.Usage = decodeUsage(envelope.Usage)
+	result.UsageState = usageEvidence(envelope.Usage)
 	return result, nil
 }
 

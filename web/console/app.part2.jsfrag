@@ -54,22 +54,23 @@ function render() {
   renderPortal();
   localizeDOM(app);
   bindImportFileInputs();
+  if(typeof syncObservabilityView==='function')syncObservabilityView(route);
 }
 
 function authenticationPage() {
   const initialize = !state.auth?.initialized;
-  return `<div class="auth-shell"><section class="card auth-card"><div class="brand auth-brand"><div class="brand-mark"><img class="brand-primary" src="./brand.svg?brand=interlock-v1" width="29" height="29" alt="" aria-hidden="true"><img class="brand-reverse" src="./brand-reverse.svg?brand=interlock-v1" width="29" height="29" alt="" aria-hidden="true"></div><div class="brand-name">SmartAPI</div></div><h1>${initialize?'Initialize administrator':'Administrator sign in'}</h1><p>${initialize?'Create the only administrator for this Local SmartAPI runtime. Initialization closes permanently after success.':'Sign in to manage models, providers, routing and API keys.'}</p><div class="next-auth-preferences"><button class="btn ghost" data-next="locale">◎ Language / 语言</button>${consoleThemeControl()}</div><form data-form="${initialize?'initialize':'login'}" class="stack"><div class="field"><label for="auth-username">Username</label><input id="auth-username" name="username" autocomplete="username" required maxlength="64" value="${esc(state.wizard.authUsername||'')}"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" autocomplete="${initialize?'new-password':'current-password'}" required minlength="12"></div>${initialize?'<div class="field"><label for="auth-confirmation">Confirm password</label><input id="auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required minlength="12"></div><div class="notice orange"><strong>First-access boundary</strong><span>Finish initialization immediately after deployment. Any visitor who reaches an uninitialized console can claim the sole administrator.</span></div>':''}<button class="btn primary" type="submit">${initialize?'Create administrator':'Sign in'}</button></form></section></div>`;
+  return `<div class="auth-shell"><section class="card auth-card"><div class="brand auth-brand"><div class="brand-mark"><img class="brand-primary" src="./brand.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"><img class="brand-reverse" src="./brand-reverse.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"></div><div class="brand-name">SmartAPI</div></div><h1>${initialize?'Initialize administrator':'Administrator sign in'}</h1><p>${initialize?'Create the only administrator for this Local SmartAPI runtime. Initialization closes permanently after success.':'Sign in to manage models, providers, routing and API keys.'}</p><div class="next-auth-preferences"><button class="btn ghost" data-next="locale">◎ Language / 语言</button>${consoleThemeControl()}</div><form data-form="${initialize?'initialize':'login'}" class="stack"><div class="field"><label for="auth-username">Username</label><input id="auth-username" name="username" autocomplete="username" required maxlength="64" value="${esc(state.wizard.authUsername||'')}"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" autocomplete="${initialize?'new-password':'current-password'}" required minlength="12"></div>${initialize?'<div class="field"><label for="auth-confirmation">Confirm password</label><input id="auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required minlength="12"></div><div class="notice orange"><strong>First-access boundary</strong><span>Finish initialization immediately after deployment. Any visitor who reaches an uninitialized console can claim the sole administrator.</span></div>':''}<button class="btn primary" type="submit">${initialize?'Create administrator':'Sign in'}</button></form></section></div>`;
 }
 
 function shell(route, content) {
   const nav = [
-    ['overview','Overview','overview'], ['models','Models & Routing','models'], ['providers','Providers','providers'], ['queue','Queue','route'], ['requests','Requests','requests'], ['billing','Usage & Billing','requests'], ['api-keys','API Keys','keys'], ['settings','Settings','settings']
+    ['overview','Overview','overview'], ['models','Models & Routing','models'], ['providers','Providers','providers'], ['queue','Queue','route'], ['requests','Requests','requests'], ['sessions','Sessions','route'], ['billing','Usage & Billing','requests'], ['api-keys','API Keys','keys'], ['settings','Settings','settings']
   ];
   const active = route.section === 'api-keys' ? 'api-keys' : route.section;
   return `
     <div class="app-shell visual-v3" data-visual-version="next">
       <aside id="main-navigation" class="sidebar ${state.mobileNav ? 'open':''}">
-        <div class="brand"><div class="brand-mark"><img class="brand-primary" src="./brand.svg?brand=interlock-v1" width="29" height="29" alt="" aria-hidden="true"><img class="brand-reverse" src="./brand-reverse.svg?brand=interlock-v1" width="29" height="29" alt="" aria-hidden="true"></div><div class="brand-name">SmartAPI</div></div>
+        <div class="brand"><div class="brand-mark"><img class="brand-primary" src="./brand.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"><img class="brand-reverse" src="./brand-reverse.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"></div><div class="brand-name">SmartAPI</div></div>
         <nav class="nav">${nav.map(([id,label,ic]) => `<a class="nav-link ${active===id?'active':''}" href="#/${id}" data-nav><span class="nav-icon">${icon(ic)}</span>${label}</a>`).join('')}</nav>
         <div class="sidebar-spacer"></div>
         <div class="sidebar-status">
@@ -94,13 +95,14 @@ function shell(route, content) {
 }
 
 function breadcrumb(route) {
-  const map = {queue:'Queue',overview:'Overview',models:'Models & Routing',providers:'Providers',requests:'Requests',billing:'Usage & Billing','api-keys':'API Keys',settings:'Settings'};
+  const map = {queue:'Queue',overview:'Overview',models:'Models & Routing',providers:'Providers',requests:'Requests',sessions:'Sessions',billing:'Usage & Billing','api-keys':'API Keys',settings:'Settings'};
   const parent=map[route.section] || esc(route.section);
   const detail=route.section==='settings'?({general:'General',concurrency:'Queue & Concurrency',import:nt('Import & Migration','导入与迁移'),backup:'Backups',revisions:'Audit & Revisions',security:'Security'}[route.id]||route.id):route.id;
   return route.id ? `<a class="breadcrumb-parent" href="#/${esc(route.section)}" data-nav>${parent}</a> <span aria-hidden="true">›</span> <span aria-current="page">${esc(detail)}</span>` : `<strong>${parent}</strong>`;
 }
 
 function renderPage(route) {
+  if(route.section==='sessions')return pageSessions(route.id);
   if (route.section === 'queue') return pageQueue();
   if (route.section === 'billing') return pageBillingNext();
   if (route.section === 'overview') return pageOverviewNext();

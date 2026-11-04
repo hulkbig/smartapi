@@ -33,3 +33,10 @@ source comments or files with unrelated names.
 - `modernc.org/mathutil@v1.7.1`
 - `modernc.org/memory@v1.11.0`
 - `modernc.org/sqlite@v1.38.0`
+
+The observability route view embeds three Provider SVGs from LobeHub through
+the reviewed Magpie snapshot. Their exact bytes, upstream paths, snapshot ID,
+and MIT notices are recorded in `LICENSES/LobeHub/source.json` and
+`LICENSES/LobeHub/NOTICE.txt`. `scripts/check_notices.py` verifies the embedded
+files and notice checksums. The visualization itself uses SmartAPI's persisted
+route and execution facts.

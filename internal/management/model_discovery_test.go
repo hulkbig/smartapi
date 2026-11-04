@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"ferry/internal/config"
@@ -1106,8 +1107,11 @@ func TestProviderProtocolDiscoveryRejectsHTTP200EmptyStream(t *testing.T) {
 
 func TestProviderProtocolDiscoveryUsesExactFullURLAndReportsPartialModels(t *testing.T) {
 	var paths []string
+	var pathsMu sync.Mutex
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pathsMu.Lock()
 		paths = append(paths, r.URL.Path)
+		pathsMu.Unlock()
 		if r.URL.Path == "/v1/models" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]string{"id": "works"}, map[string]string{"id": "fails"}}})
 			return
@@ -1146,6 +1150,8 @@ func TestProviderProtocolDiscoveryUsesExactFullURLAndReportsPartialModels(t *tes
 	if len(models) != 1 || models[0] != "works" || len(modelResults) != 2 {
 		t.Fatalf("partial model evidence=%v", result)
 	}
+	pathsMu.Lock()
+	defer pathsMu.Unlock()
 	for _, path := range paths {
 		if strings.Contains(path, "chat/completions") {
 			t.Fatalf("full URL was modified: paths=%v", paths)
