@@ -28,6 +28,12 @@ Selected connections remain distinct from calls in progress. Waiting for admissi
 
 Views initially show the current or final state; completed requests do not autoplay. Explicit historical playback is labeled as replay and supports pause, stepping, speed and returning to the latest state. At 1×, steps remain visible for at least 1.6 seconds and transfer steps for at least 3 seconds. Each transfer takes about 2.8 seconds and runs once per newly observed event or replay step; polling and relayout do not restart it. Reduced motion preserves static highlighting and explanations. Hidden or offscreen views pause relevant animation or polling.
 
+## Real requests in Model Routing
+
+The Model Routing page visualizes the current logical model's conditional branches in evaluation order, keeps the default route visible, and shows each step's Provider, upstream model and conditions for advancing after a failure. A rule's `enabled` state describes its configuration; actual matches come from the selected request's recorded decisions and execution events.
+
+The same page reuses the real request diagram above. Sources and requests are strictly filtered by the current logical model, with a time range, four sources per page, request selection and a link to full Request details. The same replay pace, working-node borders, static terminal states and reduced-motion behavior apply. Current configuration does not replace historical routing snapshots.
+
 ## Provider traffic and refresh
 
 Provider traffic shows four source cards per page with pagination. A selected Request determines the highlighted route. Participation requires an actual attempt or dispatch; waiting sources are listed separately, and merely being a candidate does not count. The complete selected request's candidates remain visible, including other Providers.
