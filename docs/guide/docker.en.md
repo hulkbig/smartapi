@@ -48,7 +48,7 @@ docker run -d --name smartapi --restart unless-stopped \
   -p 127.0.0.1:17910:7900 -p 127.0.0.1:17810:7890 \
   -v smartapi-data:/data --read-only --tmpfs /tmp:size=32m,mode=1777 \
   --cap-drop ALL --security-opt no-new-privileges:true \
-  bighulk/smartapi:1.1.1
+  bighulk/smartapi:1.1.2
 ```
 
 Choose one installation method; never run two processes against the same data.
@@ -100,7 +100,7 @@ Restoring replaces current data with the selected backup; later writes are not m
 
 ## Upgrade
 
-Verify a backup and rehearse its restoration; use `-backup-history` if history must be retained. Read the target release notes. Change the image version in `compose.yaml`, then run:
+Verify a backup and rehearse its restoration; use `-backup-history` if history must be retained. Read the target release notes ([1.1.2](../releases/1.1.2.md)). Change the image version in `compose.yaml`, then run:
 
 ```sh
 docker compose pull

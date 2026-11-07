@@ -3,6 +3,7 @@
 const observationContexts=new Map();
 let activeObservationContext=null;
 let observationSearchTimer=null;
+let observationSelectInteraction=null;
 
 function observationContext(type,id=''){
   const key=`${type}:${id}`;
@@ -12,15 +13,17 @@ function observationContext(type,id=''){
   if(previous&&previous.entryQuery===entryQuery)return previous;
   const filters={window:'24h',q:'',caller_id:'',logical_model:'',participating_provider:'',status:'',outcome:''};
   for(const name of ['window','q','caller_id','logical_model','participating_provider','status','outcome','from','to','scope'])if(hash.has(name))filters[name]=hash.get(name);
+  if(type==='model')filters.logical_model=id;
   if(filters.scope==='all')delete filters.window;
   if(previous){
     previous.entryQuery=entryQuery;previous.filters=filters;previous.resource.cancel();previous.resource.data=null;previous.resource.error=null;
     resetObservationQuery(previous);return previous;
   }
-  const ctx={key,type,id,entryQuery,filters,mode:'session',cursor:'',cursorStack:[],offset:0,sourceId:'',requestId:'',graph:null};
+  const ctx={key,type,id,entryQuery,filters,mode:type==='model'?'request':'session',cursor:'',cursorStack:[],offset:0,sourceId:'',requestId:'',explicitRequest:null,graph:null};
   ctx.resource=new ObservationResource((event,resource)=>{
     if(event==='success'){
       ctx.sourceId=resource.data.sourceId||'';ctx.requestId=resource.data.requestId||'';
+      if(ctx.explicitRequest?.id===ctx.requestId)ctx.explicitRequest={id:ctx.requestId,source:resource.data.sources.find(s=>s.source_id===ctx.sourceId)};
       if(resource.data.detail?.id)state.requestCache.set(resource.data.detail.id,resource.data.detail);
     }
     if(activeObservationContext===ctx)renderObservationPreservingFocus();
@@ -43,7 +46,8 @@ function observationFilters(ctx,{timeline=false}={}){
   const filters={...ctx.filters};
   if(filters.scope==='all'){delete filters.window;delete filters.from;delete filters.to;}
   if(ctx.type==='provider'&&ctx.id)filters.participating_provider=ctx.id;
-  if(!timeline){filters.limit=ctx.type==='provider'?4:25;if(ctx.cursor)filters.cursor=ctx.cursor;if(ctx.type==='provider')filters.mode=ctx.mode;}
+  if(ctx.type==='model')filters.logical_model=ctx.id;
+  if(!timeline){filters.limit=['provider','model'].includes(ctx.type)?4:25;if(ctx.cursor)filters.cursor=ctx.cursor;if(['provider','model'].includes(ctx.type))filters.mode=ctx.mode;}
   return filters;
 }
 
@@ -116,7 +120,7 @@ function observationEmpty(ctx,message){
 function observationPagination(ctx,{timeline=false}={}){
   const data=ctx.resource.data,page=data?.page,total=timeline?Number(data?.requests?.total||0):Number(page?.total||0);
   const previous=timeline?ctx.offset>0:ctx.cursorStack.length>0,next=timeline?ctx.offset+(data?.requests?.length||0)<total:Boolean(page?.next_cursor);
-  return `<div class="observability-pagination"><span>${esc(total)} ${nt(timeline?'matching requests':ctx.type==='provider'?'matching sources':'matching Sessions',timeline?'条匹配请求':ctx.type==='provider'?'个匹配来源':'个匹配 Sessions')}</span><div><button class="btn small" data-observe="${timeline?'timeline-prev':'previous'}" ${!previous||ctx.resource.loading?'disabled':''}>${nt('Previous','上一页')}</button><button class="btn small" data-observe="${timeline?'timeline-next':'next'}" ${!next||ctx.resource.loading?'disabled':''}>${nt('Next','下一页')}</button></div></div>`;
+  return `<div class="observability-pagination"><span>${esc(total)} ${nt(timeline||ctx.type==='model'?'matching requests':ctx.type==='provider'?'matching sources':'matching Sessions',timeline||ctx.type==='model'?'条匹配请求':ctx.type==='provider'?'个匹配来源':'个匹配 Sessions')}</span><div><button class="btn small" data-observe="${timeline?'timeline-prev':'previous'}" ${!previous||ctx.resource.loading?'disabled':''}>${nt('Previous','上一页')}</button><button class="btn small" data-observe="${timeline?'timeline-next':'next'}" ${!next||ctx.resource.loading?'disabled':''}>${nt('Next','下一页')}</button></div></div>`;
 }
 
 function observationFocus(ctx){
@@ -178,9 +182,15 @@ function renderObservationTraffic(providerId=''){
     ${sources.length?`${observationRequestPicker(ctx)}${data.detail?`<div data-observation-graph="${esc(ctx.key)}"></div>`:observationEmpty(ctx,nt('Request details unavailable','请求详情暂不可用'))}${observationPagination(ctx)}`:observationEmpty(ctx,nt('No matching traffic sources','没有匹配的流量来源'))}</section>`;
 }
 
+function renderModelRoutingTraffic(modelId){
+  const ctx=observationContext('model',modelId);observationEnsureLoad(ctx);
+  const data=ctx.resource.data;
+  return `<section class="observability-section model-routing-traffic" data-observation-model="${esc(modelId)}"><div class="section-head"><div><h2>${nt('Request execution','请求执行')}</h2></div><div class="row-actions"><select class="select" data-observe-field="window" aria-label="${esc(nt('Execution time window','执行记录时间范围'))}">${[['15m',nt('15 minutes','15 分钟')],['1h',nt('1 hour','1 小时')],['24h',nt('24 hours','24 小时')],['168h',nt('7 days','7 天')]].map(([value,label])=>`<option value="${value}" ${ctx.filters.window===value?'selected':''}>${label}</option>`).join('')}</select><button class="btn small" data-observe="refresh">${icon('refresh')} ${nt('Refresh','刷新')}</button>${data?.requestId?`<a class="btn small" href="${esc(observationRequestHref(data.requestId,ctx))}">${nt('Full Request','完整 Request')} ↗</a>`:''}</div></div>${observationScope(ctx)}${data?.detail?`${observationRequestPicker(ctx)}<div data-observation-graph="${esc(ctx.key)}"></div>${observationPagination(ctx)}`:observationEmpty(ctx,nt('No requests in this time window','这个时间范围内没有请求'))}</section>`;
+}
+
 async function loadObservationContext(ctx,{replace=false}={}){
   if(ctx.type==='request')return;
-  const filters=observationFilters(ctx),intent={sourceId:ctx.sourceId,requestId:ctx.requestId,offset:ctx.offset};
+  const filters=observationFilters(ctx),intent={sourceId:ctx.sourceId,requestId:ctx.requestId,offset:ctx.offset,explicitRequest:ctx.type==='model'?ctx.explicitRequest:null};
   return ctx.resource.load(async signal=>{
     const options={signal};let page,sources,requests=[];
     if(ctx.type==='session'){
@@ -188,18 +198,28 @@ async function loadObservationContext(ctx,{replace=false}={}){
     }else if(ctx.type==='sessions'){
       page=await adapter.getSessions(filters,options);sources=page.sessions||[];
     }else{
-      page=await adapter.getProviderTraffic(ctx.id,filters,options);sources=page.sources||[];
+      page=await adapter.getProviderTraffic(ctx.type==='model'?'':ctx.id,filters,options);sources=page.sources||[];
     }
-    let selected=sources.find(s=>s.source_id===intent.sourceId)||sources.find(s=>observabilityModel.sourceRequestId(s)===intent.requestId)||sources[0];
+    if(signal.aborted)return;
+    let selected=(ctx.type==='model'&&sources.find(s=>observabilityModel.sourceRequestId(s)===intent.requestId))||sources.find(s=>s.source_id===intent.sourceId)||sources.find(s=>observabilityModel.sourceRequestId(s)===intent.requestId)||sources[0];
+    if(intent.explicitRequest)selected=sources.find(s=>observabilityModel.sourceRequestId(s)===intent.explicitRequest.id)||intent.explicitRequest.source;
     if(!selected)return {page,sources,requests,detail:null,sourceId:'',requestId:''};
     let requestId=observabilityModel.sourceRequestId(selected);
     const timelineFilters=observationFilters(ctx,{timeline:true});
     if(page.scope?.from&&page.scope?.to&&timelineFilters.scope!=='all'){timelineFilters.from=page.scope.from;timelineFilters.to=page.scope.to;delete timelineFilters.window;}
-    if(selected.session_id){
+    if(ctx.type==='model'){
+      requests=sources.map(source=>({id:observabilityModel.sourceRequestId(source),raw:source.selected_request,result:observationStatus(source.selected_request?.status||source.selected_request_status)}));
+    }else if(selected.session_id){
       requests=await adapter.getSessionRequests(selected.session_id,{...timelineFilters,limit:ctx.type==='session'?25:50,offset:ctx.type==='session'?intent.offset:0},options);
       if(intent.requestId&&requests.some(r=>r.id===intent.requestId))requestId=intent.requestId;
     }else if(selected.selected_request){requests=[{id:requestId,raw:selected.selected_request,result:observationStatus(selected.selected_request.status)}];requests.total=1;}
     const detail=requestId?await adapter.getRequest(requestId,options):null;
+    if(intent.explicitRequest){
+      // Keep one explicitly selected, model-scoped source even when traffic
+      // pushes it off this page. The picker still exposes every page entry.
+      selected=observabilityModel.focusedSource(selected,detail);
+      sources=sources.some(s=>s.source_id===selected.source_id)?sources.map(s=>s.source_id===selected.source_id?selected:s):[selected,...sources].slice(0,filters.limit);
+    }
     return {page,sources,requests,detail,sourceId:selected.source_id,requestId};
   },{replace});
 }
@@ -225,9 +245,11 @@ function decorateObservedRequest(route){
 function syncObservabilityView(route){
   let ctx=null,detail=null;
   if(route.section==='sessions')ctx=observationContext(route.id?'session':'sessions',route.id||'');
+  else if(route.section==='models'&&route.id&&app.querySelector('[data-observation-model]'))ctx=observationContext('model',route.id);
   else if(route.section==='providers'&&app.querySelector('[data-observation-provider]'))ctx=observationContext('provider',route.id||'');
   else if(route.section==='requests'&&route.id){const entry=decorateObservedRequest(route);if(entry){ctx=entry.ctx;detail=entry.detail}}
   if(activeObservationContext!==ctx){
+    clearTimeout(observationSearchTimer);observationSearchTimer=null;observationSelectInteraction=null;
     activeObservationContext?.resource.cancel();activeObservationContext?.graph?.destroy();if(activeObservationContext)activeObservationContext.graph=null;
     activeObservationContext=ctx;
   }
@@ -237,42 +259,53 @@ function syncObservabilityView(route){
   if(!slot||!detail){ctx.graph?.destroy();ctx.graph=null;return;}
   const data=ctx.resource.data,source=data?.sources.find(s=>s.source_id===data.sourceId);
   const options={locale:consoleLocale,mode:ctx.type==='request'?'detail':ctx.type==='provider'?'provider':'compact',
-    sources:ctx.type==='provider'?data.sources.map(s=>s.source_id===data.sourceId?observabilityModel.focusedSource(s,detail):s):source?[observabilityModel.focusedSource(source,detail)]:undefined,selectedSourceId:data?.sourceId,
+    sources:['provider','model'].includes(ctx.type)?data.sources.map(s=>s.source_id===data.sourceId?observabilityModel.focusedSource(s,detail):s):source?[observabilityModel.focusedSource(source,detail)]:undefined,selectedSourceId:data?.sourceId,
     sessionHref:id=>observationSessionHref(id,ctx),requestHref:id=>observationRequestHref(id,ctx),onSelectSource:source=>selectObservationSource(ctx,source.source_id)};
   observationAttachGraph(ctx,slot,detail,options);
 }
 
 function selectObservationSource(ctx,id){
   const source=ctx.resource.data?.sources.find(s=>s.source_id===id);if(!source)return;
-  ctx.sourceId=id;ctx.requestId=observabilityModel.sourceRequestId(source);ctx.graph?.pause();loadObservationContext(ctx,{replace:true});
+  ctx.sourceId=id;selectObservationRequest(ctx,observabilityModel.sourceRequestId(source));
 }
 
-function resetObservationQuery(ctx){ctx.cursor='';ctx.cursorStack=[];ctx.offset=0;ctx.sourceId='';ctx.requestId='';ctx.graph?.pause();}
+function selectObservationRequest(ctx,id){
+  if(ctx.type==='model'){
+    const data=ctx.resource.data,source=[...(data?.sources||[]),...(data?.page?.sources||[])].find(s=>observabilityModel.sourceRequestId(s)===id);
+    if(!source)return;
+    ctx.explicitRequest={id,source};ctx.sourceId=source.source_id;
+  }
+  ctx.requestId=id;ctx.graph?.pause();loadObservationContext(ctx,{replace:true});
+}
+
+function resetObservationSelection(ctx){ctx.sourceId='';ctx.requestId='';ctx.explicitRequest=null;ctx.graph?.pause();}
+function resetObservationQuery(ctx){ctx.cursor='';ctx.cursorStack=[];ctx.offset=0;resetObservationSelection(ctx);}
 
 document.addEventListener('click',event=>{
   const control=event.target.closest('[data-observe]'),ctx=activeObservationContext;if(!control||!ctx||control.disabled)return;
   const action=control.dataset.observe;
   if(action==='source'){selectObservationSource(ctx,control.dataset.source);return;}
-  if(action==='request'){ctx.requestId=control.dataset.request;loadObservationContext(ctx,{replace:true});return;}
-  if(action==='mode'){ctx.mode=control.dataset.mode;ctx.cursor='';ctx.cursorStack=[];ctx.graph?.pause();loadObservationContext(ctx,{replace:true});return;}
-  if(action==='next'){ctx.cursorStack.push(ctx.cursor);ctx.cursor=ctx.resource.data?.page.next_cursor||'';ctx.sourceId='';ctx.requestId='';}
-  if(action==='previous'){ctx.cursor=ctx.cursorStack.pop()||'';ctx.sourceId='';ctx.requestId='';}
+  if(action==='request'){selectObservationRequest(ctx,control.dataset.request);return;}
+  if(action==='mode'){ctx.mode=control.dataset.mode;resetObservationQuery(ctx);loadObservationContext(ctx,{replace:true});return;}
+  if(action==='next'){ctx.cursorStack.push(ctx.cursor);ctx.cursor=ctx.resource.data?.page.next_cursor||'';resetObservationSelection(ctx);}
+  if(action==='previous'){ctx.cursor=ctx.cursorStack.pop()||'';resetObservationSelection(ctx);}
   if(action==='timeline-next')ctx.offset+=25;
   if(action==='timeline-prev')ctx.offset=Math.max(0,ctx.offset-25);
   if(action==='all-retained'){ctx.filters={...ctx.filters,scope:'all'};delete ctx.filters.window;delete ctx.filters.from;delete ctx.filters.to;resetObservationQuery(ctx);}
-  if(action==='clear'){ctx.filters={window:'24h',q:'',caller_id:'',logical_model:'',participating_provider:'',status:'',outcome:''};resetObservationQuery(ctx);}
+  if(action==='clear'){ctx.filters={window:'24h',q:'',caller_id:'',logical_model:ctx.type==='model'?ctx.id:'',participating_provider:'',status:'',outcome:''};resetObservationQuery(ctx);}
   if(action==='refresh'){ctx.cursor='';ctx.cursorStack=[];ctx.offset=0;}
   loadObservationContext(ctx,{replace:true});
 });
 
 document.addEventListener('change',async event=>{
   const control=event.target.closest('[data-observe-field]'),ctx=activeObservationContext;if(!control)return;
+  observationSelectInteraction=null;
   const field=control.dataset.observeField;
   if(field==='content-mode'){
     control.disabled=true;try{state.settings=await adapter.updateSettings({observability_content_mode:control.checked?'excerpt':'metadata_only'});render()}catch(error){showToast(error.message,'error');control.checked=state.settings?.observability_content_mode==='excerpt';control.disabled=false}return;
   }
   if(!ctx||field==='q')return;
-  if(field==='request'){ctx.requestId=control.value;loadObservationContext(ctx,{replace:true});return;}
+  if(field==='request'){selectObservationRequest(ctx,control.value);return;}
   ctx.filters[field]=control.value;
   if(field==='window'){delete ctx.filters.from;delete ctx.filters.to;delete ctx.filters.scope;}
   resetObservationQuery(ctx);loadObservationContext(ctx,{replace:true});
@@ -281,12 +314,32 @@ document.addEventListener('change',async event=>{
 document.addEventListener('input',event=>{
   const control=event.target.closest('[data-observe-field="q"]'),ctx=activeObservationContext;if(!control||!ctx)return;
   ctx.filters.q=control.value;clearTimeout(observationSearchTimer);
-  observationSearchTimer=setTimeout(()=>{if(activeObservationContext!==ctx)return;resetObservationQuery(ctx);loadObservationContext(ctx,{replace:true})},300);
+  resetObservationQuery(ctx);ctx.resource.cancel();
+  observationSearchTimer=setTimeout(()=>{observationSearchTimer=null;if(activeObservationContext!==ctx)return;loadObservationContext(ctx,{replace:true})},300);
 });
+
+// Focus survives refreshes. Only an open select (or a brief native-popup
+// interaction on browsers without :open) should hold off polling.
+document.addEventListener('pointerdown',event=>{
+  const control=event.target.closest('select[data-observe-field]');
+  observationSelectInteraction=control?{control,until:Date.now()+5000}:null;
+});
+document.addEventListener('keydown',event=>{
+  const control=event.target.closest('select[data-observe-field]');if(!control)return;
+  if(['Escape','Tab'].includes(event.key)||(['Enter',' '].includes(event.key)&&observationSelectInteraction?.control===control))observationSelectInteraction=null;
+  else if(event.key.length===1||['Enter','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'].includes(event.key))observationSelectInteraction={control,until:Date.now()+5000};
+});
+document.addEventListener('focusout',event=>{if(observationSelectInteraction?.control===event.target)observationSelectInteraction=null;});
+
+function observationSelectOpen(){
+  const control=document.activeElement;if(!control?.matches('select[data-observe-field]'))return false;
+  try{if(control.matches(':open'))return true;}catch{}
+  return observationSelectInteraction?.control===control&&Date.now()<observationSelectInteraction.until;
+}
 
 setInterval(()=>{
   const ctx=activeObservationContext;
-  if(!ctx||ctx.type==='request'||document.hidden||ctx.resource.loading||!state.auth?.authenticated||document.activeElement?.matches('[data-observe-field]'))return;
+  if(!ctx||ctx.type==='request'||document.hidden||ctx.resource.loading||!state.auth?.authenticated||observationSearchTimer!==null||observationSelectOpen())return;
   loadObservationContext(ctx);
 },3000);
 document.addEventListener('visibilitychange',()=>{if(document.hidden)activeObservationContext?.resource.cancel();});

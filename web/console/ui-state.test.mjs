@@ -495,7 +495,7 @@ assert.match(source, /v3-workspace-page/, 'production model detail must use the 
 assert.match(source, /model-action-bar/, 'model actions must be grouped in one polished control surface');
 assert.match(source, /nextAnalytics\(\{model:id\}\)/, 'model detail must show real scoped analytics');
 assert.match(source, /model-routing-panel/, 'model detail must give Routing its own full-width panel');
-assert.ok(source.indexOf('nextAnalytics({model:id})') < source.indexOf('model-routing-panel'), 'analytics must appear before Routing');
+assert.ok(source.indexOf('nextAnalytics({model:id})') < source.indexOf('modelRoutingPlan(m,routes,'), 'model Overview analytics must appear before the Routing branch');
 assert.doesNotMatch(source, /What SmartAPI did after upstream failures|Exceptions layered on top of the default route/, 'model detail must remove the old Protection and Overrides sections');
 assert.doesNotMatch(source, /Local Runtime|Single-runtime scope/, 'the sidebar must not expose the meaningless runtime scope block');
 assert.match(source, /action==='model-requests'.*openReportRequests/, 'model request navigation uses shared report drillthrough');

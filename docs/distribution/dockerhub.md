@@ -20,13 +20,13 @@ SmartAPI runs as one Go process with an embedded web console and local SQLite st
 ### Install
 
 ```sh
-curl -fsSLo compose.yaml https://github.com/hulkbig/smartapi/releases/download/v1.0.1/compose.yaml
+curl -fsSLo compose.yaml https://github.com/hulkbig/smartapi/releases/download/v1.1.2/compose.yaml
 docker compose up -d --no-build
 ```
 
-Open **http://localhost:17910** and create the administrator. Image: `bighulk/smartapi:1.1.1`, Linux AMD64 / ARM64. No source checkout or separate database is needed.
+Open **http://localhost:17910** and create the administrator. Image: `bighulk/smartapi:1.1.2`, Linux AMD64 / ARM64. No source checkout or separate database is needed.
 
-[Installation, remote access, backups and upgrades](https://github.com/hulkbig/smartapi/blob/v1.0.1/docs/guide/docker.en.md) · [中文安装指南](https://github.com/hulkbig/smartapi/blob/v1.0.1/docs/guide/docker.md) · [Source and issues](https://github.com/hulkbig/smartapi)
+[Installation, remote access, backups and upgrades](https://github.com/hulkbig/smartapi/blob/v1.1.2/docs/guide/docker.en.md) · [中文安装指南](https://github.com/hulkbig/smartapi/blob/v1.1.2/docs/guide/docker.md) · [Source and issues](https://github.com/hulkbig/smartapi)
 
 ### What SmartAPI handles
 
