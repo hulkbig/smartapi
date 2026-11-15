@@ -516,6 +516,10 @@ func TestScheduledBackupContinuesAfterRetentionErrorButBlocksUnresolvedState(t *
 				t.Fatal(err)
 			}
 			if mode == "hardlink" {
+				report, readErr := backuppolicy.ReadReport(data)
+				if readErr != nil || len(report.Runs) != 1 || report.Runs[0].Status != "success" || !report.Runs[0].VerifiedReadback || report.Runs[0].Bytes <= 0 || report.Runs[0].CompletedAt == nil {
+					t.Fatalf("missing actual backup report: %+v %v", report, readErr)
+				}
 				var result map[string]any
 				if err := json.Unmarshal([]byte(output.String()), &result); err != nil {
 					t.Fatal(err)

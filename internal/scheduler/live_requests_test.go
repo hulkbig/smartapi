@@ -50,6 +50,14 @@ func TestLiveIngressQueueExecutionAndFinalization(t *testing.T) {
 	if len(rows) != 1 || rows[0].RequestID != id || rows[0].Phase != TrafficWaiting || rows[0].ConsumerKey != "caller" || rows[0].LogicalModelID != "smart" {
 		t.Fatalf("waiting request omitted or lost identity: %+v", rows)
 	}
+	observedDeadline := time.Now().Add(time.Second)
+	for len(rows) == 1 && rows[0].WaitingSince == nil && time.Now().Before(observedDeadline) {
+		time.Sleep(time.Millisecond)
+		rows = f.sch.UnfinishedRequests()
+	}
+	if len(rows) != 1 || rows[0].WaitingSince == nil || rows[0].WaitDeadline == nil || !rows[0].WaitDeadline.After(*rows[0].WaitingSince) {
+		t.Fatalf("actual admission wait not observed: %+v", rows)
+	}
 	if q := f.manager.QueueStates(); len(q) == 0 {
 		t.Fatal("no queue snapshot")
 	}
@@ -61,7 +69,7 @@ func TestLiveIngressQueueExecutionAndFinalization(t *testing.T) {
 	}
 	awaitLiveStatus(t, f, id, "active")
 	rows = f.sch.UnfinishedRequests()
-	if len(rows) != 1 || rows[0].Phase != TrafficActive || rows[0].ConnectionID != "connection-a" {
+	if len(rows) != 1 || rows[0].Phase != TrafficActive || rows[0].ConnectionID != "connection-a" || rows[0].WaitingSince != nil || rows[0].WaitDeadline != nil {
 		t.Fatalf("active request: %+v", rows)
 	}
 	// The handler must not overwrite execution owned by the scheduler.

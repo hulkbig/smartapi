@@ -164,3 +164,50 @@ func TestAnalyticsValuesEveryPlanUsingAttemptPrices(t *testing.T) {
 		t.Fatalf("Codex request and report disagree: %+v", e)
 	}
 }
+
+func TestCallerAnalyticsAndRequestDrillUseSameStableIdentity(t *testing.T) {
+	f := newV2APIFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, caller := range []string{"caller-a", "caller-b", ""} {
+		id := []string{"first", "second", "historical"}[i]
+		f.ledger.BeginRequest(domain.RequestRecord{ID: id, Ts: now.Add(-time.Minute), ConsumerKey: "Same display name", LogicalModelID: "model", Status: domain.ReqSuccess, Outcome: domain.OutcomeDirectSuccess})
+		if caller != "" {
+			f.ledger.BeginObservation(domain.ObservationInput{RequestID: id, At: now.Add(-time.Minute), CallerIdentityID: caller})
+		}
+		f.ledger.FinishRequest(id, nil)
+	}
+	bounds := "from=" + now.Add(-time.Hour).Format(time.RFC3339) + "&to=" + now.Format(time.RFC3339)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec, body := f.do(http.MethodGet, "/api/analytics?"+bounds, nil)
+		requireStatus(t, rec, http.StatusOK)
+		if body["summary"].(map[string]any)["requests"] == float64(3) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("requests not persisted")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	for i, caller := range []string{"caller-a", "caller-b", "__unknown__"} {
+		rec, report := f.do(http.MethodGet, "/api/analytics?"+bounds+"&caller_id="+caller, nil)
+		requireStatus(t, rec, http.StatusOK)
+		if report["summary"].(map[string]any)["requests"] != float64(1) {
+			t.Fatalf("caller filter ignored: %s %+v", caller, report)
+		}
+		groups := report["callers"].([]any)
+		if len(groups) != 1 || groups[0].(map[string]any)["id"] != caller {
+			t.Fatalf("caller group: %+v", groups)
+		}
+		rec, requests := f.do(http.MethodGet, "/api/requests?"+bounds+"&caller_id="+caller, nil)
+		requireStatus(t, rec, http.StatusOK)
+		rows := requests["requests"].([]any)
+		if len(rows) != 1 || rows[0].(map[string]any)["id"] != []string{"first", "second", "historical"}[i] {
+			t.Fatalf("wrong drill: %+v", requests)
+		}
+		scope := requests["scope"].(map[string]any)
+		if scope["from"] != now.Add(-time.Hour).Format(time.RFC3339) || scope["to"] != now.Format(time.RFC3339) {
+			t.Fatalf("time scope missing: %+v", scope)
+		}
+	}
+}

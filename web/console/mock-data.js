@@ -55,24 +55,24 @@ export const initialData = {
     ]
   },
   models: [
-    { id:'gpt-5.6-sol', name:'gpt-5.6-sol', description:'Unified OpenAI-compatible model', enabled:true, status:'Protected', requestRate:45.27, firstToken:'218ms', completion:'1.42s', recovered:29 },
-    { id:'claude-opus', name:'claude-opus', description:'Anthropic high-reasoning route', enabled:true, status:'Healthy', requestRate:23.8, firstToken:'205ms', completion:'1.06s', recovered:12 },
-    { id:'smart', name:'smart', description:'Balanced automatic model route', enabled:true, status:'Healthy', requestRate:28.8, firstToken:'176ms', completion:'740ms', recovered:5 },
+    { id:'gpt-5.6-sol', name:'gpt-5.6-sol', description:'Unified OpenAI-compatible model', enabled:true, status:'Protected', tokensPerSecond:42.3, speedSamples:679, requestRate:45.27, firstToken:'218ms', completion:'1.42s', recovered:29 },
+    { id:'claude-opus', name:'claude-opus', description:'Anthropic high-reasoning route', enabled:true, status:'Healthy', tokensPerSecond:31.6, speedSamples:357, requestRate:23.8, firstToken:'205ms', completion:'1.06s', recovered:12 },
+    { id:'smart', name:'smart', description:'Balanced automatic model route', enabled:true, status:'Healthy', tokensPerSecond:56.8, speedSamples:432, requestRate:28.8, firstToken:'176ms', completion:'740ms', recovered:5 },
     { id:'gpt-4o', name:'gpt-4o', description:'General OpenAI route', enabled:true, status:'Healthy', requestRate:0, firstToken:'191ms', completion:'890ms', recovered:0 },
     { id:'gemini-1.5-pro', name:'gemini-1.5-pro', description:'Google large-context route', enabled:false, status:'Unavailable', requestRate:0, firstToken:'—', completion:'—', recovered:0 }
   ],
   routes: {
     'gpt-5.6-sol': [
-      { id:'codex-personal', provider:'Codex Personal', model:'openai/gpt-5.6-sol', status:'Recovering', serving:61, mode:'First', recoverOn:['connect_failure','rate_limit','provider_5xx','quota_exhausted','ttft_timeout','stream_broken'] },
-      { id:'openrouter-main', provider:'OpenRouter Main', model:'openai/gpt-5.6', status:'Healthy', serving:39, mode:'Next', recoverOn:['connect_failure','rate_limit','provider_5xx','quota_exhausted','ttft_timeout','stream_broken'] },
+      { id:'codex-personal', provider:'Codex Personal', model:'openai/gpt-5.6-sol', tokensPerSecond:51.4, speedSamples:420, status:'Recovering', serving:61, mode:'First', recoverOn:['connect_failure','rate_limit','provider_5xx','quota_exhausted','ttft_timeout','stream_broken'] },
+      { id:'openrouter-main', provider:'OpenRouter Main', model:'openai/gpt-5.6', tokensPerSecond:45.2, speedSamples:259, status:'Healthy', serving:39, mode:'Next', recoverOn:['connect_failure','rate_limit','provider_5xx','quota_exhausted','ttft_timeout','stream_broken'] },
       { id:'openai-direct', provider:'OpenAI Direct', model:'gpt-5.6', status:'Standby', serving:0, mode:'Next', recoverOn:[] }
     ],
     'claude-opus': [
-      { id:'anthropic-main', provider:'Anthropic Main', model:'claude-opus-4.1', status:'Healthy', serving:100, mode:'First', recoverOn:['connect_failure','rate_limit','provider_5xx','quota_exhausted','ttft_timeout','stream_broken'] },
+      { id:'anthropic-main', provider:'Anthropic Main', model:'claude-opus-4.1', tokensPerSecond:35.8, speedSamples:357, status:'Healthy', serving:100, mode:'First', recoverOn:['connect_failure','rate_limit','provider_5xx','quota_exhausted','ttft_timeout','stream_broken'] },
       { id:'openrouter-main', provider:'OpenRouter Main', model:'anthropic/claude-opus', status:'Healthy', serving:0, mode:'Next', recoverOn:[] }
     ],
     'smart': [
-      { id:'openrouter-main', provider:'OpenRouter Main', model:'smart', status:'Healthy', serving:100, mode:'First', recoverOn:[] }
+      { id:'openrouter-main', provider:'OpenRouter Main', model:'smart', tokensPerSecond:60.2, speedSamples:432, status:'Healthy', serving:100, mode:'First', recoverOn:[] }
     ]
   },
   overrides: [

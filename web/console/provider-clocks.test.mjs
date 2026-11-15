@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+const source=await fs.readFile(new URL('./app.part4.jsfrag',import.meta.url),'utf8');
+const context=vm.createContext({Date,Number,Math,nt:en=>en,consoleLocale:'en-US',esc:String,icon:()=>'',state:{providers:[],providerCache:new Map(),settings:{}},providerIsEnabled:p=>p.enabled!==false,document:{hidden:false,querySelectorAll:()=>[]}});
+vm.runInContext(source.slice(source.indexOf('function providerResetAt('),source.indexOf('function providerQuotaSummary(')),context);
+const now=Date.parse('2026-11-13T09:00:00Z'),at=seconds=>now+seconds*1000;
+for(const [seconds,tone] of [[259201,'normal'],[259200,'near'],[86401,'near'],[86400,'today'],[3601,'today'],[3600,'soon'],[1,'soon'],[0,'due'],[-1,'due']])assert.equal(context.providerClockState(at(seconds),'reset',now).tone,tone,seconds);
+assert.equal(context.providerClockState(null,'reset',now).text,'Reset —');assert.equal(context.providerClockState(at(120),'next',now).tone,'normal');
+assert.equal(context.providerResetAt({reset_at:at(30)/1000},null),at(30));
+assert.equal(context.providerResetAt({reset_after_seconds:30},new Date(now).toISOString()),at(30));
+assert.equal(context.providerResetAt({reset_after_seconds:30},null),null);
+assert.match(context.providerClockState(at(172800),'reset',now).text,/2d 0h/);
+assert.match(context.providerNextSync({enabled:false}),/Sync paused/);
+assert.match(context.providerNextSync({enabled:true,raw:{model_sync:{next_run_at:new Date(at(1000)).toISOString()}}}),/Next model catalog sync/);
+// The shared timer changes only the label and tone, never replaces the row.
+let label={textContent:'old'},tones={};const node={dataset:{providerClock:String(Date.now()+30000),clockKind:'reset'},querySelector:()=>label,classList:{toggle:(name,on)=>tones[name]=on}};
+context.document.querySelectorAll=selector=>selector==='[data-provider-clock]'?[node]:[];
+vm.runInContext(source.slice(source.indexOf('function updateProviderTimers('),source.indexOf('function providerIsCodex(')),context);
+context.updateProviderTimers();assert.equal(tones.soon,true);assert.match(label.textContent,/Reset <1m/);
+console.log('PASS quota countdown boundaries, missing evidence, next sync and in-place clock updates');

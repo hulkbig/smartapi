@@ -21,6 +21,8 @@ const context=vm.createContext({
  esc:value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),icon:()=>'',
  adapter:{getAnalytics:filters=>new Promise((resolve,reject)=>pending.push({filters,resolve,reject}))},
 });
+const controls=await fs.readFile(new URL('./app.part1.jsfrag',import.meta.url),'utf8');
+vm.runInContext(controls.slice(controls.indexOf('function uiHint('),controls.indexOf('const resourceHash')),context);
 vm.runInContext(source,context);
 vm.runInContext('Object.assign(globalThis,{nextCost,nextCount,nextSuccess,nextTheoreticalCoverage})',context);
 vm.runInContext(messages,context);
@@ -113,15 +115,15 @@ const providerSource=await fs.readFile(new URL('./app.part4.jsfrag',import.meta.
 const listSource=providerSource.slice(providerSource.indexOf('function pageProviders()'),providerSource.indexOf('\nfunction providerListCard'));
 const providerState={providers:[],providerSearch:''};
 const providerContext=vm.createContext({
- state:providerState,refreshQuotaOnEntry(){},providerIsCodex:()=>false,scenarioView:()=>({}),scenarioBanner:()=>'',icon:()=>'',esc:String,demoMode:false,
- providerModels:()=>[],providerUpstreamModels:()=>[],providerListCard:p=>'<article>'+p.name+'</article>',
+ state:providerState,nt:en=>en,refreshQuotaOnEntry(){},providerIsCodex:()=>false,scenarioView:()=>({}),scenarioBanner:()=>'',icon:()=>'',esc:String,demoMode:false,
+ providerModels:()=>[],providerUpstreamModels:()=>[],providerTableRow:p=>'<tr><td>'+p.name+'</td></tr>',uiHint:()=>'',
 });
 vm.runInContext(listSource,providerContext);
-assert.match(providerContext.pageProviders(),/No providers/);
+assert.match(providerContext.pageProviders(),/No matching providers/);
 providerState.providers=[{id:'p1',name:'Provider One',type:'custom',status:'Healthy'}];
-assert.match(providerContext.pageProviders(),/<article>Provider One<\/article>/);
+assert.match(providerContext.pageProviders(),/<tr><td>Provider One<\/td><\/tr>/);
 providerState.providerSearch='missing';
-assert.match(providerContext.pageProviders(),/No providers/);
+assert.match(providerContext.pageProviders(),/No matching providers/);
 console.log('PASS provider collection navigation and search');
 
 // Exact, shareable request cohorts clear stale filters and restore report context.
@@ -144,7 +146,7 @@ context.location.hash='#/requests?report='+encodeURIComponent(JSON.stringify({fr
 assert.equal(context.applyReportLocation(),true);assert.equal(state.requestLogicalModel,'');assert.equal(state.reportOrigin,null);
 assert.match(context.nextCostLabel({cost:1,priced_attempts:1,unpriced_attempts:1}),/partial/);
 assert.equal(context.nextCostLabel({cost:0,priced_attempts:0,unpriced_attempts:1}),'—');
-assert.match(context.nextDetailTabs('providers','p'),/Health & capacity.*Usage & quota.*Configuration/);
+assert.match(context.nextDetailTabs('providers','p'),/Accounts & quota.*Usage & quality.*Traffic diagnostics.*Configuration/);
 assert.match(context.nextDetailTabs('models','a'),/Overview.*Routing/);
 console.log('PASS exact report drillthrough, reload, return context, unknown and partial costs');
 
@@ -157,8 +159,9 @@ assert.equal(context.nextTheoreticalCoverage({attempts:2,theoretical_priced_atte
 const estimateRows=Array.from({length:8},(_,i)=>({id:'provider-'+i,basis:'attempts',attempts:1,requests:1,attempt_succeeded:1,theoretical_cost:i===7?0:8-i,theoretical_priced_attempts:i===7?0:1,theoretical_unpriced_attempts:i===7?1:0,cost:0,priced_attempts:0,unpriced_attempts:1}));
 const estimateSummary={...estimateRows[0],attempts:8,theoretical_cost:35,theoretical_priced_attempts:7,theoretical_unpriced_attempts:1};
 const estimateData={summary:estimateSummary,providers:estimateRows,reference_pricing:{source:'fixture <catalog>',version:'v1',updated_at:state.analyticsTo,stale:true}};
+state.analyticsDimension='providers';
 const billing=context.nextBillingPanels(estimateData,{});
-assert.ok(billing.includes('Other providers</span><strong>≈ $2.00 · partial'));
+assert.ok(billing.includes('Other</span><strong>≈ $2.00 · partial'));
 assert.match(billing,/fixture &lt;catalog>.*Cached prices/);
 assert.match(billing,/Recorded costs &amp; diagnostics|Recorded costs & diagnostics/);
 const table=context.nextAttribution(estimateRows,'providers',estimateSummary,{},estimateData);

@@ -29,6 +29,8 @@ loadListener(clickSource, "app.addEventListener('click'");
 loadListener(inputSource, "portal.addEventListener('input'");
 const formStart = formSource.indexOf('function modelFormModal(');
 const formEnd = formSource.indexOf('\nconst overrideProtocolOptions', formStart);
+const controls=await read(1);context.icon=()=>'';
+vm.runInContext(controls.slice(controls.indexOf('function uiHint('),controls.indexOf('const resourceHash')),context);
 vm.runInContext(formSource.slice(formStart, formEnd), context);
 const click = dataset => actions.click({target:{closest:() => ({dataset})}});
 const input = (wizard, value) => inputs.input({target:{dataset:{wizard}, value}});

@@ -19,6 +19,7 @@ import (
 )
 
 type v2RouteStepView struct {
+	ledger.ModelSpeed
 	ProviderID          string               `json:"provider_id"`
 	UpstreamModel       string               `json:"upstream_model"`
 	RecoverOn           []domain.FailureType `json:"recover_on"`
@@ -60,6 +61,8 @@ type v2ConnectionView struct {
 	FullURL       string                    `json:"full_url,omitempty"`
 	Enabled       bool                      `json:"enabled"`
 	CredentialRef string                    `json:"credential_ref,omitempty"`
+	QuotaGroupID  string                    `json:"quota_group_id,omitempty"`
+	QuotaScope    string                    `json:"quota_scope,omitempty"`
 	Models        []v2ConnectionModelView   `json:"models"`
 	Concurrency   *domain.ConcurrencyPolicy `json:"concurrency,omitempty"`
 	Runtime       domain.ConnectionState    `json:"runtime"`
@@ -70,6 +73,7 @@ type v2ConnectionView struct {
 }
 
 type v2ProviderView struct {
+	ModelSpeeds          []ledger.ProviderModelSpeed      `json:"model_speeds"`
 	ID                   string                           `json:"id"`
 	Name                 string                           `json:"name"`
 	Type                 domain.ProviderType              `json:"type"`
@@ -237,7 +241,12 @@ func (s *Server) handleV2Overview(w http.ResponseWriter, r *http.Request) {
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	models := s.v2ModelViews(routeTraffic)
+	speeds, err := s.deps.Ledger.ProviderModelSpeeds(r.Context(), from, to)
+	if err != nil {
+		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	models := s.v2ModelViews(routeTraffic, speeds)
 	enrichV2Models(models, byModel)
 	protection := map[string]int{"healthy": 0, "protected": 0, "degraded": 0, "unavailable": 0}
 	needsAttention := []string{}
@@ -356,7 +365,12 @@ func (s *Server) handleV2Models(w http.ResponseWriter, r *http.Request) {
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	models := s.v2ModelViews(routeTraffic)
+	speeds, err := s.deps.Ledger.ProviderModelSpeeds(r.Context(), from, to)
+	if err != nil {
+		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	models := s.v2ModelViews(routeTraffic, speeds)
 	enrichV2Models(models, modelTraffic)
 	writeMgmtJSON(w, http.StatusOK, map[string]any{"models": models, "from": from, "to": to})
 }
@@ -377,7 +391,12 @@ func (s *Server) handleV2ModelDetail(w http.ResponseWriter, r *http.Request) {
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	models := s.v2ModelViews(routeTraffic)
+	speeds, err := s.deps.Ledger.ProviderModelSpeeds(r.Context(), from, to)
+	if err != nil {
+		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	models := s.v2ModelViews(routeTraffic, speeds)
 	enrichV2Models(models, modelTraffic)
 	for _, model := range models {
 		if model.ID == r.PathValue("id") {
@@ -388,10 +407,16 @@ func (s *Server) handleV2ModelDetail(w http.ResponseWriter, r *http.Request) {
 	writeMgmtErr(w, http.StatusNotFound, "logical model not found")
 }
 
-func (s *Server) v2ModelViews(traffic []ledger.RouteTrafficSummary) []v2ModelView {
+func (s *Server) v2ModelViews(traffic []ledger.RouteTrafficSummary, speedGroups ...[]ledger.ProviderModelSpeed) []v2ModelView {
 	snap := s.deps.Scheduler.Snapshot()
 	if snap == nil {
 		return []v2ModelView{}
+	}
+	speeds := map[string]ledger.ModelSpeed{}
+	for _, group := range speedGroups {
+		for _, item := range group {
+			speeds[domain.ProviderModelKey(item.ProviderID, item.UpstreamModel)] = item.ModelSpeed
+		}
 	}
 	now := time.Now()
 	connectionStates := s.deps.Manager.ConnectionStates(now)
@@ -422,6 +447,7 @@ func (s *Server) v2ModelViews(traffic []ledger.RouteTrafficSummary) []v2ModelVie
 		}
 		for _, step := range model.DefaultRoute.Steps {
 			stepView := v2RouteStepView{
+				ModelSpeed: speeds[domain.ProviderModelKey(step.ProviderID, step.UpstreamModel)],
 				ProviderID: step.ProviderID, UpstreamModel: step.UpstreamModel,
 				RecoverOn: cloneV2RecoveryFailures(step.RecoverOn), RuntimeState: "unavailable",
 			}
@@ -540,7 +566,12 @@ func (s *Server) handleV2Providers(w http.ResponseWriter, r *http.Request) {
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeMgmtJSON(w, http.StatusOK, map[string]any{"providers": s.v2ProviderViews(traffic), "from": from, "to": to})
+	speeds, err := s.deps.Ledger.ProviderModelSpeeds(r.Context(), from, to)
+	if err != nil {
+		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeMgmtJSON(w, http.StatusOK, map[string]any{"providers": s.v2ProviderViews(traffic, speeds), "from": from, "to": to})
 }
 
 func (s *Server) handleV2ProviderDetail(w http.ResponseWriter, r *http.Request) {
@@ -554,7 +585,12 @@ func (s *Server) handleV2ProviderDetail(w http.ResponseWriter, r *http.Request) 
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	for _, provider := range s.v2ProviderViews(traffic) {
+	speeds, err := s.deps.Ledger.ProviderModelSpeeds(r.Context(), from, to)
+	if err != nil {
+		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, provider := range s.v2ProviderViews(traffic, speeds) {
 		if provider.ID == r.PathValue("id") {
 			provider.RecentRecovery = s.v2RecentProviderRecovery(provider.ID, from, to)
 			writeMgmtJSON(w, http.StatusOK, provider)
@@ -600,7 +636,7 @@ func (s *Server) v2RecentProviderRecovery(providerID string, from, to time.Time)
 	return events
 }
 
-func (s *Server) v2ProviderViews(traffic []ledger.TrafficSummary) []v2ProviderView {
+func (s *Server) v2ProviderViews(traffic []ledger.TrafficSummary, speedGroups ...[]ledger.ProviderModelSpeed) []v2ProviderView {
 	snap := s.deps.Scheduler.Snapshot()
 	if snap == nil {
 		return []v2ProviderView{}
@@ -608,6 +644,12 @@ func (s *Server) v2ProviderViews(traffic []ledger.TrafficSummary) []v2ProviderVi
 	trafficByID := map[string]*ledger.TrafficSummary{}
 	for i := range traffic {
 		trafficByID[traffic[i].ID] = &traffic[i]
+	}
+	speedsByProvider := map[string][]ledger.ProviderModelSpeed{}
+	for _, group := range speedGroups {
+		for _, item := range group {
+			speedsByProvider[item.ProviderID] = append(speedsByProvider[item.ProviderID], item)
+		}
 	}
 	now := time.Now()
 	states := s.deps.Manager.ConnectionStates(now)
@@ -634,7 +676,8 @@ func (s *Server) v2ProviderViews(traffic []ledger.TrafficSummary) []v2ProviderVi
 			continue
 		}
 		view := v2ProviderView{
-			ID: provider.ID, Name: provider.Name, Type: provider.Type,
+			ModelSpeeds: append([]ledger.ProviderModelSpeed{}, speedsByProvider[id]...),
+			ID:          provider.ID, Name: provider.Name, Type: provider.Type,
 			BaseURL: provider.BaseURL, Enabled: provider.Enabled,
 			ModelSyncInterval: provider.ModelSyncInterval.Effective(), ModelSyncCatalog: cloneProviderModelSyncCatalog(provider.ModelSyncCatalog), ProtocolConversion: provider.ProtocolConversion,
 			ScheduledMessage: cloneProviderScheduledMessage(provider.ScheduledMessage),
@@ -656,6 +699,7 @@ func (s *Server) v2ProviderViews(traffic []ledger.TrafficSummary) []v2ProviderVi
 			if connection := snap.Connections[ref.ID]; connection != nil {
 				state := states[connection.ID]
 				connectionView := v2ConnectionDTO(snap, connection, state, connectionAffinity[connection.ID])
+				connectionView.QuotaGroupID, connectionView.QuotaScope = s.codingQuotaMembership(provider.ID, connection.ID)
 				if s.deps.OAuth != nil {
 					if account, ok := domain.OAuthAccountFromRef(connection.Credential.SecretRef); ok {
 						if authorizeURL, started, pending := s.deps.OAuth.PendingLogin(account); pending {
@@ -704,6 +748,16 @@ func (s *Server) v2ProviderViews(traffic []ledger.TrafficSummary) []v2ProviderVi
 				})
 			}
 		}
+		seenSpeeds := map[string]bool{}
+		for _, speed := range view.ModelSpeeds {
+			seenSpeeds[speed.UpstreamModel] = true
+		}
+		for _, catalog := range view.ModelCatalog {
+			if !seenSpeeds[catalog.UpstreamModel] {
+				view.ModelSpeeds = append(view.ModelSpeeds, ledger.ProviderModelSpeed{ProviderID: id, UpstreamModel: catalog.UpstreamModel})
+			}
+		}
+		sort.Slice(view.ModelSpeeds, func(i, j int) bool { return view.ModelSpeeds[i].UpstreamModel < view.ModelSpeeds[j].UpstreamModel })
 		if view.Connections == nil {
 			view.Connections = []v2ConnectionView{}
 		}
@@ -959,7 +1013,7 @@ func (s *Server) handleV2Requests(w http.ResponseWriter, r *http.Request) {
 		s.addReferencePricing(item, &page.Requests[i])
 		items = append(items, item)
 	}
-	writeMgmtJSON(w, http.StatusOK, map[string]any{"as_of": page.AsOf, "total": page.Total, "requests": items})
+	writeMgmtJSON(w, http.StatusOK, map[string]any{"as_of": page.AsOf, "scope": map[string]any{"from": filter.From, "to": filter.To}, "total": page.Total, "requests": items})
 }
 
 func v2RequestSummary(record *domain.RequestRecord, conversationID string) map[string]any {
@@ -1058,7 +1112,7 @@ func (s *Server) handleV2RequestDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	s.addReferencePricing(response["client_request"].(map[string]any), record)
 	if trace != nil {
-		response["route_snapshot"] = publicRouteSnapshot(trace)
+		response["route_snapshot"] = s.requestRouteSnapshot(record, trace)
 		response["trace_revision"] = trace.Revision
 		response["events_truncated"] = trace.EventsTruncated
 		response["required_capabilities"] = trace.RequiredCaps
@@ -1187,6 +1241,7 @@ func (s *Server) handleV2SettingsGet(w http.ResponseWriter, _ *http.Request) {
 		"codex_default_client_version":     domain.CodexClientVersion,
 		"pricing_sync":                     s.pricing.Status(time.Now().UTC()),
 		"backup":                           s.backupSettings(),
+		"backup_status":                    s.backupReport(),
 	})
 }
 

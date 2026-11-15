@@ -4,7 +4,7 @@
 
 ## 环境与目录
 
-使用 `go.mod` 中指定的 Go 版本，当前为 Go 1.26.10。完整检查还需要 Node.js、npm 和 Python 3；CI 使用 Node.js 22、Python 3.12。控制台为原生 JavaScript／CSS，没有 npm 包安装步骤。
+使用 `go.mod` 中指定的 Go 版本，当前为 Go 1.26.11。完整检查还需要 Node.js、npm 和 Python 3；CI 使用 Node.js 22、Python 3.12。控制台为原生 JavaScript／CSS，没有 npm 包安装步骤。
 
 ```text
 smartapi/

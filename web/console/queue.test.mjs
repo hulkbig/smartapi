@@ -39,7 +39,7 @@ const context=vm.createContext({
  state:{auth:{authenticated:true},settings:{},providers:[provider],providerCache:new Map()},Date,Math,Number,FormData,encodeURIComponent,URLSearchParams,consoleLocale:'en-US',location:{hash:'#/queue'},
  app:{addEventListener:(name,fn)=>listeners[name]=fn,querySelector:()=>node},document:{hidden:false},
  currentRoute:()=>route,render:()=>renders++,localizeDOM:()=>{},setInterval:()=>{},queueMicrotask,
- nt:en=>en,esc:value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),badge:value=>String(value),
+ nt:en=>en,esc:value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),icon:()=>'',badge:(value,label=value)=>String(label),
  showToast:(message,type)=>toasts.push({message,type}),
  adapter:{getQueue:async()=>q,getSettings:async()=>({revision:7,concurrency:{max_concurrent:2}}),updateSettings:async patch=>{writes.push(patch);return {revision:8,...patch};},getProvider:async()=>({provider,connections:[{id:'c',raw:{}}]}),updateConnection:async(...args)=>writes.push(args),updateProvider:async(...args)=>writes.push(args)},
 });
@@ -88,7 +88,7 @@ assert.equal(run('queueEditing.connection'),'c','deep links open the exact conne
 assert.equal(run('queueEditing.provider'),'p');
 // Re-entering the same link must reopen the editor after it was canceled.
 context.window={addEventListener:(name,handler)=>listeners[name]=handler};
-context.applyReportLocation=()=>false;context.providerQuotaView='';
+context.restoreConsoleLocation=()=>false;context.providerQuotaView='';
 run(appSource.split('\n').find(line=>line.startsWith("window.addEventListener('hashchange'")));
 await click('cancel');context.location.hash='#/queue';route={section:'queue'};listeners.hashchange();
 context.location.hash='#/settings/concurrency?provider=p&connection=c';route={section:'settings',id:'concurrency'};listeners.hashchange();

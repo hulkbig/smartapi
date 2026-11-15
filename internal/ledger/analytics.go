@@ -18,6 +18,7 @@ type Analytics struct {
 	Summary          AnalyticsMetric   `json:"summary"`
 	Models           []AnalyticsMetric `json:"models"`
 	Providers        []AnalyticsMetric `json:"providers"`
+	Callers          []AnalyticsMetric `json:"callers"`
 	Coverage         ReportingCoverage `json:"coverage"`
 	BucketSeconds    int64             `json:"bucket_seconds"`
 	GeneratedAt      time.Time         `json:"generated_at"`
@@ -199,6 +200,12 @@ func (l *Ledger) QueryAnalytics(ctx context.Context, from, to time.Time, model, 
 // QueryAnalyticsWithEstimates values each attempt independently of its plan
 // kind, retaining per-attempt cache semantics and long-context price tiers.
 func (l *Ledger) QueryAnalyticsWithEstimates(ctx context.Context, from, to time.Time, model, provider string, estimate AnalyticsEstimator) (*Analytics, error) {
+	return l.QueryAnalyticsForCallerWithEstimates(ctx, from, to, model, provider, "", estimate)
+}
+
+// Caller attribution uses the durable identity captured with the request.
+// Historical display names are not identity evidence and stay unclassified.
+func (l *Ledger) QueryAnalyticsForCallerWithEstimates(ctx context.Context, from, to time.Time, model, provider, caller string, estimate AnalyticsEstimator) (*Analytics, error) {
 	if to.UnixMilli() <= from.UnixMilli() {
 		return nil, errors.New("analytics window must span at least one millisecond")
 	}
@@ -212,7 +219,7 @@ func (l *Ledger) QueryAnalyticsWithEstimates(ctx context.Context, from, to time.
 		basis = "attempts"
 	}
 	total := newAnalyticsAccumulator("", basis)
-	models, providers := map[string]*analyticsAccumulator{}, map[string]*analyticsAccumulator{}
+	models, providers, callers := map[string]*analyticsAccumulator{}, map[string]*analyticsAccumulator{}, map[string]*analyticsAccumulator{}
 	group := func(groups map[string]*analyticsAccumulator, id, b string) *analyticsAccumulator {
 		if id == "" {
 			id = "__unknown__"
@@ -241,28 +248,30 @@ func (l *Ledger) QueryAnalyticsWithEstimates(ctx context.Context, from, to time.
 		return nil, err
 	}
 
+	const callerID = "COALESCE(NULLIF(ro.caller_identity_id,''),'__unknown__')"
 	const modelID = "COALESCE(NULLIF(r.logical_model_id,''),NULLIF(r.model_requested,''),'__unknown__')"
 	where := `r.ts>=? AND r.ts<? AND (?='' OR ` + modelID + `=?) AND (?='' OR EXISTS(SELECT 1 FROM attempts p WHERE p.request_id=r.id AND COALESCE(NULLIF(p.provider_id,''),'__unknown__')=?))`
-	args := []any{from.UnixMilli(), to.UnixMilli(), model, model, provider, provider}
+	where += ` AND (?='' OR ` + callerID + `=?)`
+	args := []any{from.UnixMilli(), to.UnixMilli(), model, model, provider, provider, caller, caller}
 	// Historical rows may contain explicit NULLs in columns whose defaults
 	// apply only to omitted values. Normalize these optional fields on read.
-	rows, err := tx.QueryContext(ctx, `SELECT r.ts,`+modelID+`,COALESCE(r.status,''),COALESCE(r.outcome,''),COALESCE(r.failure_type,''),COALESCE(r.ttft_ms,0),COALESCE(r.duration_ms,0),
+	rows, err := tx.QueryContext(ctx, `SELECT r.ts,`+modelID+`,`+callerID+`,COALESCE(r.status,''),COALESCE(r.outcome,''),COALESCE(r.failure_type,''),COALESCE(r.ttft_ms,0),COALESCE(r.duration_ms,0),
  NOT EXISTS(SELECT 1 FROM attempts a WHERE a.request_id=r.id),COALESCE(r.est_cash_cost,0),COALESCE(r.allocated_sub_cost,0)
- FROM logical_requests r WHERE `+where, args...)
+ FROM logical_requests r LEFT JOIN request_observations ro ON ro.request_id=r.id WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var ts, ttft, duration int64
-		var mid, status, outcome, failure string
+		var mid, cid, status, outcome, failure string
 		var missing bool
 		var cash, sub float64
-		if err = rows.Scan(&ts, &mid, &status, &outcome, &failure, &ttft, &duration, &missing, &cash, &sub); err != nil {
+		if err = rows.Scan(&ts, &mid, &cid, &status, &outcome, &failure, &ttft, &duration, &missing, &cash, &sub); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		m := group(models, mid, basis)
-		for _, a := range []*analyticsAccumulator{total, m} {
+		for _, a := range []*analyticsAccumulator{total, m, group(callers, cid, basis)} {
 			a.Requests++
 			if status == "success" {
 				a.Succeeded++
@@ -327,17 +336,17 @@ func (l *Ledger) QueryAnalyticsWithEstimates(ctx context.Context, from, to time.
 	if err = rows.Close(); err != nil {
 		return nil, err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT r.ts,`+modelID+`,COALESCE(r.status,''),COALESCE(NULLIF(a.provider_id,''),'__unknown__'),a.seq,COALESCE(a.status,''),COALESCE(a.failure_type,''),COALESCE(a.ttft_ms,0),COALESCE(a.latency_ms,0),COALESCE(a.plan_kind,''),COALESCE(a.rate_card_version,''),COALESCE(a.est_cash_cost,0),COALESCE(a.allocated_sub_cost,0),COALESCE(a.input_tokens,0),COALESCE(a.cache_read_tokens,0),COALESCE(a.cache_write_tokens,0),COALESCE(a.output_tokens,0),COALESCE(a.protocol,''),COALESCE(a.model,''),a.est_cash_cost IS NOT NULL
- FROM attempts a JOIN logical_requests r ON r.id=a.request_id WHERE `+where+` AND (?='' OR COALESCE(NULLIF(a.provider_id,''),'__unknown__')=?)`, append(args, provider, provider)...)
+	rows, err = tx.QueryContext(ctx, `SELECT r.ts,`+modelID+`,`+callerID+`,COALESCE(r.status,''),COALESCE(NULLIF(a.provider_id,''),'__unknown__'),a.seq,COALESCE(a.status,''),COALESCE(a.failure_type,''),COALESCE(a.ttft_ms,0),COALESCE(a.latency_ms,0),COALESCE(a.plan_kind,''),COALESCE(a.rate_card_version,''),COALESCE(a.est_cash_cost,0),COALESCE(a.allocated_sub_cost,0),COALESCE(a.input_tokens,0),COALESCE(a.cache_read_tokens,0),COALESCE(a.cache_write_tokens,0),COALESCE(a.output_tokens,0),COALESCE(a.protocol,''),COALESCE(a.model,''),a.est_cash_cost IS NOT NULL
+ FROM attempts a JOIN logical_requests r ON r.id=a.request_id LEFT JOIN request_observations ro ON ro.request_id=r.id WHERE `+where+` AND (?='' OR COALESCE(NULLIF(a.provider_id,''),'__unknown__')=?)`, append(args, provider, provider)...)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var ts, seq, ttft, duration, input, read, write, output int64
-		var mid, requestStatus, pid, status, failure, plan, version, protocol, upstreamModel string
+		var mid, cid, requestStatus, pid, status, failure, plan, version, protocol, upstreamModel string
 		var reference, sub float64
 		var hasReference bool
-		if err = rows.Scan(&ts, &mid, &requestStatus, &pid, &seq, &status, &failure, &ttft, &duration, &plan, &version, &reference, &sub, &input, &read, &write, &output, &protocol, &upstreamModel, &hasReference); err != nil {
+		if err = rows.Scan(&ts, &mid, &cid, &requestStatus, &pid, &seq, &status, &failure, &ttft, &duration, &plan, &version, &reference, &sub, &input, &read, &write, &output, &protocol, &upstreamModel, &hasReference); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -358,7 +367,7 @@ func (l *Ledger) QueryAnalyticsWithEstimates(ctx context.Context, from, to time.
 				theoretical = nil
 			}
 		}
-		for _, a := range []*analyticsAccumulator{total, group(models, mid, basis), group(providers, pid, "attempts")} {
+		for _, a := range []*analyticsAccumulator{total, group(models, mid, basis), group(providers, pid, "attempts"), group(callers, cid, basis)} {
 			a.Attempts++
 			if status == "success" {
 				a.AttemptSucceeded++
@@ -448,5 +457,6 @@ func (l *Ledger) QueryAnalyticsWithEstimates(ctx context.Context, from, to time.
 	out.Summary = total.finish()
 	out.Models = analyticsGroups(models)
 	out.Providers = analyticsGroups(providers)
+	out.Callers = analyticsGroups(callers)
 	return out, nil
 }

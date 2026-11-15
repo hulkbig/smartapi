@@ -1,21 +1,28 @@
-    ${nextDetailSelected('providers',id,'configuration')?`<section class="card panel v3-configuration-card"><div class="notice orange resource-impact-notice"><strong>Route dependency</strong><span>${esc(providerImpactText(p))} Delete removes this provider from routes and migrates existing conversations.</span></div><div class="section-head"><div><h2>Provider Configuration</h2><p>One endpoint, credential, and upstream model catalog.</p></div><div class="row-actions"><button class="btn small" data-action="test-provider" data-id="${esc(id)}">Test</button><button class="btn small primary" data-action="edit-provider" data-id="${esc(id)}">Edit Provider</button></div></div><div class="grid-2"><div><div class="cell-sub">Endpoint</div><div class="cell-title mono">${esc(p.raw?.base_url||'—')}</div><div class="cell-sub" style="margin-top:12px">Credential</div><div class="cell-title">${esc(credential?.type||'Not configured')}</div><div class="cell-sub">${esc(credential?.account||'—')}</div></div><div><div class="cell-sub">Detected upstream models · listed aggregators may require manual Logical Model selection</div><div class="model-chip-list">${upstreamModels.map(model=>state.models.some(item=>item.id===model)?`<button class="badge blue model-shortcut" data-action="open-model" data-id="${esc(model)}" title="Open same-name Logical Model">${esc(model)} <span>→ Logical Model</span></button>`:`<span class="badge">${esc(model)} · Not listed</span>`).join('')||'<div class="empty"><strong>No upstream models</strong>Edit the provider to add one or more upstream model names.</div>'}</div></div></div></section>`:''}</div>`;
+    ${nextDetailSelected('providers',id,'configuration')?`<section class="card panel v3-configuration-card"><div class="section-head"><div><h2>Provider Configuration ${uiHint("Route dependency",providerImpactText(p))}</h2></div><div class="row-actions"><button class="btn small" data-action="test-provider" data-id="${esc(id)}">Test</button><button class="btn small primary" data-action="edit-provider" data-id="${esc(id)}">Edit Provider</button></div></div>${providerProtocolMatrix(conns)}<div class="grid-2 section"><div><div class="cell-sub">Endpoint</div><div class="cell-title mono">${esc(p.raw?.base_url||'—')}</div><div class="cell-sub" style="margin-top:12px">Credential</div><div class="cell-title">${esc(credential?.type||'Not configured')}</div><div class="cell-sub">${esc(credential?.account||'—')}</div></div><div><div class="cell-sub">Upstream models</div><div class="model-chip-list">${upstreamModels.map(model=>state.models.some(item=>item.id===model)?`<button class="badge blue model-shortcut" data-action="open-model" data-id="${esc(model)}" title="Open same-name Logical Model">${esc(model)} <span>→ Logical Model</span></button>`:`<span class="badge">${esc(model)} · Not listed</span>`).join('')||'<div class="empty"><strong>No upstream models</strong>Edit the provider to add one or more upstream model names.</div>'}</div></div></div></section>`:''}</div>`;
 }
-async function loadAndRenderProvider(id){try{const data=await adapter.getProvider(id);state.providerCache.set(id,data);render();await loadProviderCodexUsage(id,data)}catch(e){showToast(e.message,'error')}}
+function providerProtocolMatrix(connections){
+ const rows=connections.flatMap(c=>[...new Set((c.models||[]).flatMap(m=>m.protocols||[]))].map(protocol=>({c,protocol,models:(c.models||[]).filter(m=>(m.protocols||[]).includes(protocol)).map(m=>m.upstream_model)})));
+ return `<div class="table-wrap"><table class="table"><thead><tr><th>Protocol</th><th>Account</th><th>Models</th><th>Status</th></tr></thead><tbody>${rows.map(({c,protocol,models})=>`<tr><td>${esc(protocol)}</td><td>${esc(c.account||c.name||c.id)}</td><td>${models.map(esc).join(' · ')}</td><td>${badge(connectionIsEnabled(c)?c.status:'Disabled')}</td></tr>`).join('')||'<tr><td colspan="4">No configured protocols</td></tr>'}</tbody></table></div>`;
+}
+async function loadAndRenderProvider(id){return loadResourceDetail('providers',id,()=>adapter.getProvider(id),state.providerCache)}
 async function loadProviderCodexUsage(id,data){
-  if(!id||!data||!providerIsCodex(data.provider))return;
-  await Promise.all((data.connections||[]).map(connection=>loadSharedCodexUsage(id,connection.id)));
+  if(!id||!data?.provider)return;
+  await Promise.all(providerUsageConnections(data.provider,data.connections||[]).map(connection=>loadSharedCodexUsage(id,connection.id)));
 }
 
 function requestFilters({limit=state.requestLimit,offset=state.requestOffset}={}){
   const outcome=state.requestFilter==='recovered'?'RECOVERED_SUCCESS':state.requestFilter==='direct'?'DIRECT_SUCCESS':state.requestFilter==='failed'?'FAILED':'';
-  const filters={logical_model:state.requestLogicalModel,participating_provider:state.requestParticipatingProvider,attempt_status:state.requestAttemptStatus,attempt_failure_type:state.requestAttemptFailureType,report_error:state.requestReportError,window:state.requestWindow,q:state.requestSearch,conversation_id:state.requestConversation,model:state.requestModel,provider:state.requestProvider,api_key:state.requestApiKey,connection:state.requestConnection,failure_type:state.requestFailureType,status:['canceled','received','waiting','active','recovering','streaming','delivering'].includes(state.requestFilter)?state.requestFilter:state.requestStatus,runtime_revision:state.requestRevision,outcome,limit,offset};
+  const filters={caller_id:state.requestCallerIdentity||'',logical_model:state.requestLogicalModel,participating_provider:state.requestParticipatingProvider,attempt_status:state.requestAttemptStatus,attempt_failure_type:state.requestAttemptFailureType,report_error:state.requestReportError,window:state.requestWindow,q:state.requestSearch,conversation_id:state.requestConversation,model:state.requestModel,provider:state.requestProvider,api_key:state.requestApiKey,connection:state.requestConnection,failure_type:state.requestFailureType,status:['canceled','received','waiting','active','recovering','streaming','delivering'].includes(state.requestFilter)?state.requestFilter:state.requestStatus,runtime_revision:state.requestRevision,outcome,limit,offset};
   if(state.requestFrom)filters.from=new Date(state.requestFrom).toISOString();if(state.requestTo)filters.to=new Date(state.requestTo).toISOString();return filters;
 }
 let requestLoadGeneration=0;
 async function reloadRequests(){
-  const generation=++requestLoadGeneration;state.requestLoading=true;render();
-  try{const requests=await adapter.getRequests(requestFilters());if(generation!==requestLoadGeneration)return;state.requests=requests;state.requestTotal=Number(requests.total??requests.length);state.requestLastUpdated=new Date();}
-  catch(e){if(generation===requestLoadGeneration)showToast(e.message,'error')}
+  const generation=++requestLoadGeneration,filters=requestFilters(),scope=JSON.stringify(filters),changed=state.requestQueryKey!==scope;
+  if(changed){state.requests=[];state.requestTotal=0;state.requestLastUpdated=null}
+  if(typeof persistRequestView==='function')persistRequestView();
+  state.requestQueryKey=scope;state.requestLoading=true;state.requestError=null;render();
+  try{const requests=await adapter.getRequests(filters);if(generation!==requestLoadGeneration)return;state.requests=requests;state.requestTotal=Number(requests.total??requests.length);state.requestLastUpdated=new Date();}
+  catch(error){if(generation===requestLoadGeneration)state.requestError={message:error.message,stale:!changed&&Boolean(state.requestLastUpdated)}}
   finally{if(generation===requestLoadGeneration){state.requestLoading=false;render()}}
 }
 
@@ -28,13 +35,14 @@ function requestDataSync(id){
 function prettyDebug(value){try{return JSON.stringify(value,null,2)}catch{return String(value??'')}}
 const requestDetailLoads=new Map();
 async function loadAndRenderRequest(id){
+  const entry=detailLoadState('requests',id);if(entry.error)return;
   if(requestDetailLoads.has(id))return requestDetailLoads.get(id).promise;
   for(const [other,load]of requestDetailLoads)if(other!==id){load.controller.abort();requestDetailLoads.delete(other)}
   const controller=new AbortController();
   const promise=Promise.resolve().then(()=>adapter.getRequest(id,{signal:controller.signal})).then(request=>{
     if(controller.signal.aborted)return;
     state.requestCache.set(id,request);if(currentRoute().section==='requests'&&currentRoute().id===id)render();
-  }).catch(error=>{if(!controller.signal.aborted&&error?.name!=='AbortError')showToast(error.message,'error')})
+  }).catch(error=>{if(!controller.signal.aborted&&error?.name!=='AbortError'){entry.error=error;const route=currentRoute();if(route.section==='requests'&&route.id===id)render()}})
     .finally(()=>{if(requestDetailLoads.get(id)?.controller===controller)requestDetailLoads.delete(id)});
   requestDetailLoads.set(id,{promise,controller});return promise;
 }
@@ -69,4 +77,26 @@ function decorateRequestWindowOptions(){
  for(const [action,value,label] of [['request-model',state.requestLogicalModel,nt('Exact match','精确匹配')],['request-provider',state.requestParticipatingProvider,nt('Participating','参与尝试')],['request-filter',state.requestStatus||state.requestAttemptStatus||state.requestAttemptFailureType||state.requestReportError,nt('Report outcome filter','报表结果筛选')]]){
   const field=app.querySelector(`[data-action="${action}"]`);if(!value||!field)continue;const option=new Option(`${value} · ${label}`,'report-scope');option.disabled=true;field.add(option);field.value='report-scope';
  }
+}
+
+const requestViewFields=['requestSearch','requestConversation','requestFilter','requestWindow','requestLogicalModel','requestCallerIdentity','requestParticipatingProvider','requestAttemptStatus','requestAttemptFailureType','requestReportError','requestModel','requestProvider','requestApiKey','requestConnection','requestFailureType','requestStatus','requestRevision','requestFrom','requestTo','requestOffset','requestLimit','requestColumns'];
+function persistRequestView(){
+ if(currentRoute().section!=='requests'||currentRoute().id)return;
+ const params=new URLSearchParams(location.hash.split('?')[1]||'');
+ params.set('view',JSON.stringify(Object.fromEntries(requestViewFields.map(key=>[key,state[key]??'']))));
+ history.replaceState(null,'','#/requests?'+params);state.appliedRequestView=location.hash;
+}
+function applyRequestViewLocation(){
+ if(currentRoute().section!=='requests'||currentRoute().id||state.appliedRequestView===location.hash)return false;
+ try{const raw=new URLSearchParams(location.hash.split('?')[1]||'').get('view');if(!raw||raw.length>12000)return false;const view=JSON.parse(raw);state.requestSearchDraft=undefined;for(const key of requestViewFields){const value=view[key];if(key==='requestOffset'){state[key]=Number.isInteger(value)&&value>=0?value:0}else if(key==='requestLimit'){state[key]=[25,50,100].includes(value)?value:25}else if(key==='requestColumns'){state[key]=value===true}else if(typeof value==='string'&&value.length<=2048){if(['requestFrom','requestTo'].includes(key)&&value&&!Number.isFinite(Date.parse(value)))continue;state[key]=value}}
+ state.appliedRequestView=location.hash;state.requestAutoRefresh=false;return true;
+ }catch{return false}
+}
+function restoreConsoleLocation(){const report=applyReportLocation(),view=applyRequestViewLocation();return report||view}
+function resourceReturnHash(fallback='#/requests'){
+ const back=new URLSearchParams(location.hash.split('?')[1]||'').get('back');
+ return back&&back.length<16000&&/^#\/(requests|sessions|providers|models|queue|api-keys|billing)([/?]|$)/.test(back)?back:fallback;
+}
+function openRequestFromCurrent(id){
+ const scope=state.requests?.scope;if(scope?.from&&scope?.to){state.requestFrom=scope.from;state.requestTo=scope.to}persistRequestView();const back=location.hash;closeOverlay();location.hash=resourceHash('requests',id)+'?back='+encodeURIComponent(back);
 }

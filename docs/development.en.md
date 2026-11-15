@@ -4,7 +4,7 @@
 
 ## Environment and layout
 
-Use the Go version declared in `go.mod`, currently Go 1.26.10. Full checks also require Node.js, npm and Python 3; CI uses Node.js 22 and Python 3.12. The console is plain JavaScript/CSS and does not require an npm package installation.
+Use the Go version declared in `go.mod`, currently Go 1.26.11. Full checks also require Node.js, npm and Python 3; CI uses Node.js 22 and Python 3.12. The console is plain JavaScript/CSS and does not require an npm package installation.
 
 | Path | Purpose |
 | --- | --- |

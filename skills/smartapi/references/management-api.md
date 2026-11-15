@@ -69,6 +69,7 @@ For high-risk calls, obtain explicit user approval and pass `--confirm-high-risk
 | High | `POST /api/providers/{id}/connections/{connection_id}/oauth/callback` | Complete login from `code`+`state` or `callback_url` |
 | High | `POST /api/providers/{id}/connections/{connection_id}/oauth/import` | Import bounded Codex `auth.json` as `auth_json` |
 | Ordinary | `GET /api/providers/{id}/connections/{connection_id}/oauth/usage` | Subscription snapshot; `refresh=false` is cache-only |
+| Ordinary | `GET /api/providers/{id}/connections/{connection_id}/usage` | Codex or Kimi/GLM/Z.ai Coding Plan snapshot; `refresh=false` is cache-only |
 | Ordinary | `GET /api/oauth/native/drivers` | Native driver inventory; no account/model capability claim |
 | Ordinary | `GET /api/oauth/native/{driver}/accounts/{account}/status` | Redacted local account status; no provider polling |
 | High | `POST /api/oauth/native/{driver}/accounts/{account}/login` | Start native browser/device authorization or service-account import |
@@ -109,6 +110,24 @@ For high-risk calls, obtain explicit user approval and pass `--confirm-high-risk
 | Ordinary | `POST /api/revisions/{revision}/restore-draft` | Create a reviewable draft from history |
 
 ## Common request shapes
+
+### Connection subscription usage
+
+`GET /api/providers/{id}/connections/{connection_id}/usage?refresh=false` reads
+the connection's cached snapshot without contacting upstream. The default
+refreshes it with a quota-only GET. An empty cache returns `usage: null`;
+replacing the endpoint or credential invalidates its snapshot. A failed refresh
+retains the last successful snapshot. Codex keeps the existing OAuth usage response.
+
+For Kimi, GLM and Z.ai, `usage` includes `provider`, `observed_at`, an optional
+`plan_name` and `windows[]`. A window can report `used_percent`, `used`,
+`remaining`, `limit`, `unit`, `limit_window_seconds` and `reset_at` (Unix seconds).
+Missing quantities are omitted. Kimi's monthly Coding usage is a `breakdown[]`
+entry in its monthly total. These snapshots are for display and have no quota reset
+action. Kimi's native OAuth credentials can query usage through their registered
+endpoint; they do not accept a full-URL override.
+
+### Logical models
 
 Create a logical model (safe initial state):
 

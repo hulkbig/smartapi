@@ -1,3 +1,14 @@
+function enhanceConsoleUI(root){
+ const actions={'request-refresh':'refresh','queue-refresh':'refresh','copy-debug':'copy','copy-key':'copy','copy-stored-key':'copy','copy-management-token':'copy','edit-provider':'edit','edit-connection':'edit','edit-model':'edit','key-policy':'edit','test-provider':'play','test-connection':'play','requests-page':'back'};
+ for(const button of root.querySelectorAll('button.btn[data-action]')){
+  const action=button.dataset.action,glyph=actions[action]||(action==='close-overlay'&&button.classList.contains('icon')?'close':null);
+  if(!glyph||button.querySelector('.spinner')||button.classList.contains('ui-action'))continue;
+  const raw=button.getAttribute('aria-label')||button.textContent.trim(),label=raw==='×'?'Close':raw==='←'?'Back':raw;
+  button.setAttribute('aria-label',label);button.dataset.tooltip=label;button.classList.add('ui-action');button.innerHTML=icon(glyph)+`<span class="ui-action-label">${esc(label)}</span>`;
+ }
+ for(const el of root.querySelectorAll('button[title],a[title]')){el.dataset.tooltip=el.getAttribute('title');if(!el.getAttribute('aria-label'))el.setAttribute('aria-label',el.getAttribute('title'));el.removeAttribute('title')}
+}
+
 async function ensureRequest(id) {
   if (!state.requestCache.has(id)) state.requestCache.set(id, await adapter.getRequest(id));
   return state.requestCache.get(id);
@@ -45,6 +56,7 @@ function render() {
     return;
   }
   if (!state.auth?.initialized || !state.auth?.authenticated) {
+    portal.innerHTML='';
     app.innerHTML = authenticationPage();
     localizeDOM(app);
     return;
@@ -52,6 +64,8 @@ function render() {
   const route = currentRoute();
   app.innerHTML = shell(route, renderPage(route));
   renderPortal();
+  restoreBackupDraft();
+  enhanceConsoleUI(app);
   localizeDOM(app);
   bindImportFileInputs();
   if(typeof syncObservabilityView==='function')syncObservabilityView(route);
@@ -59,19 +73,19 @@ function render() {
 
 function authenticationPage() {
   const initialize = !state.auth?.initialized;
-  return `<div class="auth-shell"><section class="card auth-card"><div class="brand auth-brand"><div class="brand-mark"><img class="brand-primary" src="./brand.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"><img class="brand-reverse" src="./brand-reverse.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"></div><div class="brand-name">SmartAPI</div></div><h1>${initialize?'Initialize administrator':'Administrator sign in'}</h1><p>${initialize?'Create the only administrator for this Local SmartAPI runtime. Initialization closes permanently after success.':'Sign in to manage models, providers, routing and API keys.'}</p><div class="next-auth-preferences"><button class="btn ghost" data-next="locale">◎ Language / 语言</button>${consoleThemeControl()}</div><form data-form="${initialize?'initialize':'login'}" class="stack"><div class="field"><label for="auth-username">Username</label><input id="auth-username" name="username" autocomplete="username" required maxlength="64" value="${esc(state.wizard.authUsername||'')}"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" autocomplete="${initialize?'new-password':'current-password'}" required minlength="12"></div>${initialize?'<div class="field"><label for="auth-confirmation">Confirm password</label><input id="auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required minlength="12"></div><div class="notice orange"><strong>First-access boundary</strong><span>Finish initialization immediately after deployment. Any visitor who reaches an uninitialized console can claim the sole administrator.</span></div>':''}<button class="btn primary" type="submit">${initialize?'Create administrator':'Sign in'}</button></form></section></div>`;
+  return `<div class="auth-shell"><section class="card auth-card"><div class="brand auth-brand"><div class="brand-mark"><img class="brand-primary" src="./brand.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"><img class="brand-reverse" src="./brand-reverse.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"></div><div class="brand-name">SmartAPI</div></div><h1>${initialize?'Initialize administrator':'Administrator sign in'}</h1>${state.sessionExpired?'<div class="notice orange" role="status">Session expired. Sign in to continue.</div>':''}<div class="next-auth-preferences"><button class="btn ghost" data-next="locale">${icon('language')} Language / 语言</button>${consoleThemeControl()}</div><form data-form="${initialize?'initialize':'login'}" class="stack"><div class="field"><label for="auth-username">Username</label><input id="auth-username" name="username" autocomplete="username" required maxlength="64" value="${esc(state.wizard.authUsername||'')}"></div><div class="field"><label for="auth-password">Password</label><input id="auth-password" name="password" type="password" autocomplete="${initialize?'new-password':'current-password'}" required minlength="12"></div>${initialize?'<div class="field"><label for="auth-confirmation">Confirm password</label><input id="auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required minlength="12"></div><div class="notice orange"><strong>First-access boundary</strong><span>Finish initialization immediately after deployment. Any visitor who reaches an uninitialized console can claim the sole administrator.</span></div>':''}<button class="btn primary" type="submit">${initialize?'Create administrator':'Sign in'}</button></form></section></div>`;
 }
 
 function shell(route, content) {
   const nav = [
-    ['overview','Overview','overview'], ['models','Models & Routing','models'], ['providers','Providers','providers'], ['queue','Queue','route'], ['requests','Requests','requests'], ['sessions','Sessions','route'], ['billing','Usage & Billing','requests'], ['api-keys','API Keys','keys'], ['settings','Settings','settings']
+    ['overview','Overview','overview'], ['queue','Queue','queue'], ['requests','Requests','requests'], ['sessions','Sessions','sessions'], ['models','Models & Routing','models'], ['providers','Providers','providers'], ['api-keys','API Keys','keys'], ['billing','Usage & Cost','chart'], ['settings','Settings','settings']
   ];
   const active = route.section === 'api-keys' ? 'api-keys' : route.section;
   return `
     <div class="app-shell visual-v3" data-visual-version="next">
       <aside id="main-navigation" class="sidebar ${state.mobileNav ? 'open':''}">
         <div class="brand"><div class="brand-mark"><img class="brand-primary" src="./brand.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"><img class="brand-reverse" src="./brand-reverse.svg?brand=smartapi-s-v1" width="29" height="29" alt="" aria-hidden="true"></div><div class="brand-name">SmartAPI</div></div>
-        <nav class="nav">${nav.map(([id,label,ic]) => `<a class="nav-link ${active===id?'active':''}" href="#/${id}" data-nav><span class="nav-icon">${icon(ic)}</span>${label}</a>`).join('')}</nav>
+        <nav class="nav">${nav.map(([id,label,ic]) => ` ${({overview:`<span class="nav-group">${nt("Monitoring","运行监控")}</span>`,models:`<span class="nav-group">${nt("Resources & access","资源与接入")}</span>`,billing:`<span class="nav-group">${nt("Usage & governance","用量与治理")}</span>`})[id]||''}<a class="nav-link ${active===id?'active':''}" href="#/${id}" data-nav><span class="nav-icon">${icon(ic)}</span>${label}</a>`).join('')}</nav>
         <div class="sidebar-spacer"></div>
         <div class="sidebar-status">
           <div class="runtime-pill"><span class="status-dot ${state.partialErrors.length?'orange':'green'}"></span><span>${state.partialErrors.length?'Runtime partially available':'Runtime connected'}</span></div>
@@ -83,7 +97,7 @@ function shell(route, content) {
       ${state.mobileNav?'<button class="mobile-scrim" data-action="mobile-menu" aria-label="Close navigation"></button>':''}
       <header class="topbar">
         <div class="topbar-left"><button class="btn icon mobile-menu" data-action="mobile-menu" aria-label="Toggle navigation" aria-controls="main-navigation" aria-expanded="${state.mobileNav}">${icon('menu')}</button><div class="breadcrumb">${breadcrumb(route)}</div></div>
-        <div class="topbar-right"><button class="btn ghost next-preference" data-next="locale" aria-label="Switch language">◎ <span>Language</span></button>${consoleThemeControl()}
+        <div class="topbar-right"><button class="btn ghost next-preference" data-next="locale" aria-label="Switch language">${icon('language')} <span>Language</span></button>${consoleThemeControl()}
           <button class="btn icon alert-bell" data-action="alerts-open" title="Alerts">${icon('alert')}${state.alertUnread?`<span>${state.alertUnread}</span>`:''}</button>
           ${demoMode?`<div class="scenario-wrap"><span class="scenario-label">Demo Scenario</span><select class="select" data-action="scenario-change">${Object.values(scenarios).map(s => `<option value="${s.id}" ${s.id===state.scenario?'selected':''}>${esc(s.label)}</option>`).join('')}</select></div>`:'<span class="badge green"><span class="status-dot green"></span>Live API</span>'}
         </div>
@@ -95,11 +109,29 @@ function shell(route, content) {
 }
 
 function breadcrumb(route) {
-  const map = {queue:'Queue',overview:'Overview',models:'Models & Routing',providers:'Providers',requests:'Requests',sessions:'Sessions',billing:'Usage & Billing','api-keys':'API Keys',settings:'Settings'};
+  const map = {queue:'Queue',overview:'Overview',models:'Models & Routing',providers:'Providers',requests:'Requests',sessions:'Sessions',billing:'Usage & Cost','api-keys':'API Keys',settings:'Settings'};
   const parent=map[route.section] || esc(route.section);
   const detail=route.section==='settings'?({general:'General',concurrency:'Queue & Concurrency',import:nt('Import & Migration','导入与迁移'),backup:'Backups',revisions:'Audit & Revisions',security:'Security'}[route.id]||route.id):route.id;
   return route.id ? `<a class="breadcrumb-parent" href="#/${esc(route.section)}" data-nav>${parent}</a> <span aria-hidden="true">›</span> <span aria-current="page">${esc(detail)}</span>` : `<strong>${parent}</strong>`;
 }
+
+
+function restoreBackupDraft(){
+ for(const input of app.querySelectorAll('[data-backup-input]')){const value=state.backupDraft?.[input.dataset.backupInput];if(value===undefined)continue;if(input.type==='checkbox')input.checked=value;else input.value=value}
+}
+function confirmDiscardEditor(){
+ if(!state.editorDirty&&!state.backupDraft)return true;
+ if(!confirmConsole(nt('Discard unsaved changes?','放弃尚未保存的修改？')))return false;
+ state.editorDirty=false;state.backupDraft=null;return true;
+}
+function markEditorDirty(event){
+ const input=event.target;
+ if(input?.dataset?.backupInput){state.backupDraft||={};state.backupDraft[input.dataset.backupInput]=input.type==='checkbox'?input.checked:input.value;return}
+ if(input?.closest?.('#portal-root')&&input.matches('input,select,textarea')&&input.dataset.scopeSearch===undefined&&!String(input.dataset.wizard||'').includes('filter'))state.editorDirty=true;
+}
+document.addEventListener('input',markEditorDirty,true);document.addEventListener('change',markEditorDirty,true);
+document.addEventListener('click',event=>{const link=event.target.closest?.('a[href^="#/"]');if(link&&link.getAttribute('href')!==location.hash&&!confirmDiscardEditor()){event.preventDefault();event.stopImmediatePropagation()}},true);
+window.addEventListener('beforeunload',event=>{if(state.editorDirty||state.backupDraft){event.preventDefault();event.returnValue=''}});
 
 function renderPage(route) {
   if(route.section==='sessions')return pageSessions(route.id);

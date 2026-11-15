@@ -6,7 +6,7 @@ in `deploy/Dockerfile`; changing that digest requires reviewing these materials.
 | Material | Source in the builder | Current evidence |
 | --- | --- | --- |
 | TLS trust bundle | `/etc/ssl/certs/ca-certificates.crt` | Alpine `ca-certificates-bundle` 20261020-r0; installed package metadata declares `MPL-2.0 AND MIT`. Pinned source archive SHA-512 verified against its APKBUILD; source URL, certdata notice and full MPL 2.0 text are in `LICENSES/container-ca`. |
-| Time zone archive | `/usr/local/go/lib/time/zoneinfo.zip` | Go 1.26.10 time-data README states the archive is compiled from the IANA database, which IANA asserts is public domain. The verbatim README is preserved under `LICENSES/toolchain/go1.26.10/time/README`. |
+| Time zone archive | `/usr/local/go/lib/time/zoneinfo.zip` | Go 1.26.11 time-data README states the archive is compiled from the IANA database, which IANA asserts is public domain. The verbatim README is preserved under `LICENSES/toolchain/go1.26.11/time/README`. |
 | Go runtime and external modules | Linked into the application | See [runtime dependency notices](third-party-notices.md) and the version/hash inventories. |
 
 The image copies the currently collected notices into `/usr/share/licenses/smartapi`.

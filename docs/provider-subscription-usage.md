@@ -1,6 +1,7 @@
 # Provider subscription usage
 
-The Provider list, workspace and Codex editor render the same cached OAuth usage snapshot.
+The Provider list and detail share a cached subscription usage snapshot for Codex and supported
+Kimi, GLM and Z.ai Coding Plan connections. The Codex editor uses the same Codex cache.
 On entry they show cached data immediately, then request a fresh snapshot through the shared,
 account-scoped request cache. An animated border and disabled refresh button indicate the request
 is pending. A failed refresh retains the last snapshot and exposes the error. Replacing the bound
@@ -48,9 +49,24 @@ OpenAI's Codex pricing documentation describes varying account limits and separa
 https://developers.openai.com/codex/pricing
 The account snapshot is authoritative for the current window duration and reset time.
 
+## Coding Plan usage
+
+Usage is available for connections to supported official Coding Plan endpoints. Kimi uses the
+configured API key or an existing native OAuth account bound to its registered endpoint.
+GLM and Z.ai use the configured connection key. Refresh queries usage without sending an
+inference request or changing scheduling and billing. Reset times are displayed when reported;
+there is no reset action for these plans.
+
+Kimi shows the reported 5-hour, weekly and monthly windows. Monthly Coding usage is a
+breakdown of the monthly total. GLM and Z.ai keep credit amounts and MCP call counts separate
+from usage percentages. Unreported quantities stay unavailable; a reported zero stays zero.
+See [Kimi membership limits](https://www.kimi.com/en/help/membership/membership-update-rules) and
+the [GLM/Z.ai usage plugin](https://github.com/zai-org/zai-coding-plugins/blob/0446d0bb0bc537d97d3ab3664c4b8b9c4a0e1254/plugins/glm-plan-usage/skills/usage-query-skill/scripts/query-usage.mjs).
+
 ## Verification
 
 subscription-usage.test.mjs covers weekly-only Pro, dual-window Plus, independent Spark windows,
 organizational credits and budgets, unknown plans, missing fields and HTML escaping.
 quota-cache.test.mjs covers refresh deduplication, retained stale snapshots, navigation and
-account replacement. Both are included in scripts/test.sh and the console's npm test command.
+account replacement. coding-usage.test.mjs covers Coding Plan connection detection, rendering,
+refresh and cache reuse. These checks are included in the console's npm test command.

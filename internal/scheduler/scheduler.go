@@ -2016,7 +2016,7 @@ func (s *Scheduler) executeInvoke(ctx context.Context, rc *domain.RequestContrac
 		d.traceAttemptStarted(t, ex, n)
 		s.setActiveTraffic(d, TrafficWaiting, t)
 
-		release, admitFailure := s.manager.Admit(ctx, id)
+		release, admitFailure := s.manager.AdmitObserved(ctx, id, s.observeAdmission(d.rec.ID))
 		if admitFailure != nil {
 			d.addTrace(domain.TraceRecovery, "ADMISSION_FAILED", t, ex, n, failureMessage(admitFailure))
 			ex.recordAttempt(id, domain.ReqFailed, admitFailure, 0, 0, domain.Usage{}, s)
@@ -2198,7 +2198,7 @@ func (s *Scheduler) executeStream(ctx context.Context, rc *domain.RequestContrac
 			d.traceAttemptStarted(t, ex, n)
 			s.setActiveTraffic(d, TrafficWaiting, t)
 
-			release, admitFailure := s.manager.Admit(ctx, id)
+			release, admitFailure := s.manager.AdmitObserved(ctx, id, s.observeAdmission(d.rec.ID))
 			if admitFailure != nil {
 				d.addTrace(domain.TraceRecovery, "ADMISSION_FAILED", t, ex, n, failureMessage(admitFailure))
 				ex.recordAttempt(id, domain.ReqFailed, admitFailure, 0, 0, domain.Usage{}, s)

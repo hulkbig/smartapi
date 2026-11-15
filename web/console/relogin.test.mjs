@@ -57,9 +57,9 @@ console.log('PASS account operations surface re-login for rejected credentials')
 const part4 = await fs.readFile(new URL('./app.part4.jsfrag', import.meta.url), 'utf8');
 const sectionHelpers = part4.slice(part4.indexOf('function providerIsEnabled('), part4.indexOf('function providerCodexUsageKey('));
 const sectionSource = part12.slice(part12.indexOf('function providerCodexUsageSection('), part12.indexOf('function codexProviderFormModal('));
-const { section } = new Function('esc', 'state', 'providerCodexUsageEntry', 'badge', 'icon',
+const { section } = new Function('esc', 'state', 'providerCodexUsageEntry', 'badge', 'icon','providerUsageGroups','providerQuotaMembership','nt',
   `${sectionHelpers}${renderer}${sectionSource};return { section:providerCodexUsageSection };`,
-)(esc, { modal:null }, () => entry, label => `<span>${label}</span>`, () => '<svg/>');
+)(esc, { modal:null }, () => entry, label => `<span>${label}</span>`, () => '<svg/>',(_p,connections)=>connections.map(connection=>({connection,members:[connection]})),()=>'',en=>en );
 const provider = { raw:{ type:'cliproxy-codex' } };
 const accounts = [{ id:'conn-1', account:'codex-example', status:'Serving' }];
 

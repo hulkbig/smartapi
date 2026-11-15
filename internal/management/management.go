@@ -78,6 +78,9 @@ type Deps struct {
 	// ProviderModelHTTPClient performs catalog-only, non-inference upstream GETs.
 	// Production uses a bounded default; tests can inject a controlled client.
 	ProviderModelHTTPClient *http.Client
+	// SubscriptionUsageHTTPClient performs read-only Coding Plan quota requests.
+	// Nil uses a bounded client; tests can inject a controlled transport.
+	SubscriptionUsageHTTPClient *http.Client
 	// ModelsDevHTTPClient fetches the community cross-provider capability
 	// aggregate (models.dev) that fills defaults for catalogs disclosing only
 	// model identifiers. Nil disables the fallback layer entirely; production
@@ -122,6 +125,8 @@ type Server struct {
 	capabilityFlights  map[string]*capabilityFlight
 	capabilitySlots    chan struct{}
 	capabilityEpoch    uint64
+	codingUsageMu      sync.Mutex
+	codingUsage        map[[32]byte]*codingUsageEntry
 }
 
 // New builds the management server.
@@ -249,6 +254,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/providers/{id}/connections/{connection_id}/oauth/callback", s.handleV2ConnectionOAuthCallback)
 	mux.HandleFunc("POST /api/providers/{id}/connections/{connection_id}/oauth/import", s.handleV2ConnectionOAuthImport)
 	mux.HandleFunc("GET /api/providers/{id}/connections/{connection_id}/oauth/usage", s.handleV2ConnectionOAuthUsage)
+	mux.HandleFunc("GET /api/providers/{id}/connections/{connection_id}/usage", s.handleV2ConnectionUsage)
 	mux.HandleFunc("GET /api/oauth/native/drivers", s.handleNativeOAuthDrivers)
 	mux.HandleFunc("POST /api/oauth/native/{driver}/accounts/{account}/login", s.handleNativeOAuthBegin)
 	mux.HandleFunc("POST /api/oauth/native/{driver}/accounts/{account}/complete", s.handleNativeOAuthComplete)

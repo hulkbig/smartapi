@@ -6,7 +6,9 @@ const source = await fs.readFile(new URL('./app.part9.jsfrag', import.meta.url),
 const start = source.indexOf('const providerProtocolMeta=');
 const end = source.indexOf('const providerCapabilityMeta=');
 assert.ok(start >= 0 && end > start);
-const { presets, apply, conversion, settings, options } = new Function('esc', `${source.slice(start, end)};return {presets:providerChannelPresets,apply:applyProviderChannelPreset,conversion:providerChannelConversionProtocols,settings:providerChannelPresetSettings,options:providerChannelPresetOptions}`)(value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'));
+const controls=await fs.readFile(new URL('./app.part1.jsfrag',import.meta.url),'utf8');
+const uiHelpers=controls.slice(controls.indexOf('function uiHint('),controls.indexOf('const resourceHash'));
+const { presets, apply, conversion, settings, options } = new Function('esc','nt','icon', `${uiHelpers}${source.slice(start, end)};return {presets:providerChannelPresets,apply:applyProviderChannelPreset,conversion:providerChannelConversionProtocols,settings:providerChannelPresetSettings,options:providerChannelPresetOptions}`)(value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),en=>en,()=> '');
 const endpoints = {
   groq:'https://api.groq.com/openai/v1', together:'https://api.together.ai/v1',
   fireworks:'https://api.fireworks.ai/inference/v1', cerebras:'https://api.cerebras.ai/v1',
@@ -75,7 +77,7 @@ for (const [id, baseUrl] of Object.entries(endpoints)) {
       assert.equal(p.probeElapsedMs, null);
       assert.equal(p.autoConvert, p.protocol !== 'openai-images');
     }
-    assert.match(settings(w), /Detect native support/);
+    assert.match(settings(w), /data-tooltip="[^"]*Capabilities require verification/);
     assert.match(options(id), new RegExp(`value="${id}" selected`));
   });
 }

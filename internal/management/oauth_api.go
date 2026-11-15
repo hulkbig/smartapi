@@ -346,11 +346,24 @@ func (s *Server) handleV2ConnectionOAuthUsage(w http.ResponseWriter, r *http.Req
 	if connection == nil {
 		return
 	}
-	identity := ""
+
+	group, _ := s.codingQuotaMembership(connection.ProviderID, connection.ID)
+	if expected := r.URL.Query().Get("quota_group_id"); expected != "" && expected != group {
+		writeMgmtErr(w, http.StatusConflict, "quota membership changed; refresh provider accounts")
+		return
+	}
+	identities := map[string]string{}
 	if s.deps.Scheduler != nil {
 		if snap := s.deps.Scheduler.Snapshot(); snap != nil {
-			if current := snap.Connections[connection.ID]; current != nil && current.Credential.SecretRef == connection.Credential.SecretRef {
-				identity = current.RuntimeIdentity()
+			for id, current := range snap.Connections {
+				_, bound := s.v2ProviderConnection(current.ProviderID, id)
+				if bound == nil || bound.Credential.SecretRef != current.Credential.SecretRef {
+					continue
+				}
+				memberGroup, _ := s.codingQuotaMembership(current.ProviderID, id)
+				if id == connection.ID || group != "" && memberGroup == group {
+					identities[id] = current.RuntimeIdentity()
+				}
 			}
 		}
 	}
@@ -365,21 +378,28 @@ func (s *Server) handleV2ConnectionOAuthUsage(w http.ResponseWriter, r *http.Req
 		writeMgmtErr(w, http.StatusBadGateway, "read Codex usage: "+err.Error())
 		return
 	}
+	currentGroup, _ := s.codingQuotaMembership(connection.ProviderID, connection.ID)
+	if currentGroup != group {
+		writeMgmtErr(w, http.StatusConflict, "quota membership changed while reading usage")
+		return
+	}
 	// Cached reads are display-only: replaying old usage would undo a reset
 	// merely because the operator reopened the connection drawer.
-	if r.URL.Query().Get("refresh") != "false" && usage != nil && s.deps.Scheduler != nil && identity != "" {
+	if r.URL.Query().Get("refresh") != "false" && usage != nil && s.deps.Scheduler != nil && len(identities) > 0 {
 		policy, policyErr := s.usageProtectionPolicy()
 		if policyErr != nil {
 			writeMgmtErr(w, http.StatusServiceUnavailable, "Codex usage protection settings unavailable")
 			return
 		}
 		if windows := oauth.ProtectionWindows(usage, policy, time.Now()); len(windows) > 0 {
-			s.deps.Scheduler.ApplyProviderQuotaForIdentity(connection.ID, identity, windows, time.Now())
+			for id, identity := range identities {
+				s.deps.Scheduler.ApplyProviderQuotaForIdentity(id, identity, windows, time.Now())
+			}
 		}
 	}
 	writeMgmtJSON(w, http.StatusOK, map[string]any{
 		"provider_id": connection.ProviderID, "connection_id": connection.ID,
-		"account": account, "usage": usage,
+		"account": account, "usage": usage, "quota_group_id": group,
 	})
 }
 

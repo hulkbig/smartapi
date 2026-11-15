@@ -82,3 +82,11 @@ func (s *Server) saveBackupPatch(p *backupPolicyPatch) error {
 	}
 	return nil
 }
+
+func (s *Server) backupReport() any {
+	report, err := backuppolicy.ReadReport(s.currentConfig().Server.DataDir)
+	if err != nil {
+		return map[string]any{"available": false}
+	}
+	return map[string]any{"available": true, "runs": report.Runs}
+}

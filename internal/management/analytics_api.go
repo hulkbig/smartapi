@@ -29,7 +29,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	estimate := func(provider, model string, input, output, read, write int64) *float64 {
 		return pricing.Estimate(model, catalogProviders[provider], input, output, read, write).Cost
 	}
-	result, err := s.deps.Ledger.QueryAnalyticsWithEstimates(ctx, from, to, r.URL.Query().Get("model"), r.URL.Query().Get("provider"), estimate)
+	result, err := s.deps.Ledger.QueryAnalyticsForCallerWithEstimates(ctx, from, to, r.URL.Query().Get("model"), r.URL.Query().Get("provider"), r.URL.Query().Get("caller_id"), estimate)
 	if err != nil {
 		writeMgmtErr(w, http.StatusInternalServerError, "analytics query unavailable")
 		return

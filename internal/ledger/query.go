@@ -275,6 +275,7 @@ type OutcomeSummary struct {
 // TrafficSummary is a stable V2 traffic slice keyed by Logical Model or
 // Provider rather than the private execution target leaf.
 type TrafficSummary struct {
+	ModelSpeed
 	ID              string     `json:"id"`
 	Requests        int64      `json:"requests"`
 	DirectTraffic   int64      `json:"direct_traffic"`
@@ -850,14 +851,17 @@ func (l *Ledger) v2TrafficBy(column string, from, to time.Time) ([]TrafficSummar
 	if column != "logical_model_id" && column != "provider_id" {
 		return nil, fmt.Errorf("unsupported V2 traffic dimension %q", column)
 	}
-	query := fmt.Sprintf(`SELECT %s, COUNT(*),`+ // #nosec G201 -- column is rejected above unless it is one of two fixed identifiers; every value stays a bound parameter.
+	query := fmt.Sprintf(`SELECT lr.%s, COUNT(*),`+ // #nosec G201 -- column is rejected above unless it is one of two fixed identifiers; every value stays a bound parameter.
 		`COALESCE(SUM(UPPER(outcome)='DIRECT_SUCCESS' OR (outcome='' AND status='success')),0),
 		COALESCE(SUM(UPPER(outcome)='RECOVERED_SUCCESS'),0),
 		COALESCE(SUM(UPPER(outcome)='FAILED' OR (outcome='' AND status!='success')),0),
 		AVG(CASE WHEN status='success' AND ttft_ms>0 THEN ttft_ms END),
 		AVG(CASE WHEN status='success' AND duration_ms>0 THEN duration_ms END),
-		MAX(CASE WHEN status='success' THEN ts END)
-		FROM logical_requests WHERE ts >= ? AND ts < ? AND %s != '' GROUP BY %s`, column, column, column)
+		MAX(CASE WHEN status='success' THEN ts END),
+        1000.0*SUM(CASE WHEN `+requestSpeedValidSQL+` THEN lr.output_tokens END)/NULLIF(SUM(CASE WHEN `+requestSpeedValidSQL+` THEN lr.duration_ms END),0),
+        COUNT(CASE WHEN `+requestSpeedValidSQL+` THEN 1 END)
+        FROM logical_requests lr LEFT JOIN request_observations ro ON ro.request_id=lr.id
+        WHERE lr.ts >= ? AND lr.ts < ? AND lr.%s != '' GROUP BY lr.%s`, column, column, column)
 	rows, err := l.read.Query(query, from.UnixMilli(), to.UnixMilli())
 	if err != nil {
 		return nil, err
@@ -866,11 +870,14 @@ func (l *Ledger) v2TrafficBy(column string, from, to time.Time) ([]TrafficSummar
 	out := []TrafficSummary{}
 	for rows.Next() {
 		var item TrafficSummary
-		var avgTTFT, avgDuration sql.NullFloat64
+		var avgTTFT, avgDuration, outputSpeed sql.NullFloat64
 		var lastSuccessMS sql.NullInt64
 		if err := rows.Scan(&item.ID, &item.Requests, &item.DirectTraffic, &item.RecoveryTraffic, &item.Failed,
-			&avgTTFT, &avgDuration, &lastSuccessMS); err != nil {
+			&avgTTFT, &avgDuration, &lastSuccessMS, &outputSpeed, &item.SpeedSamples); err != nil {
 			return nil, err
+		}
+		if outputSpeed.Valid {
+			item.OutputTokensPerSecond = &outputSpeed.Float64
 		}
 		if avgTTFT.Valid {
 			item.AvgTTFTMS = &avgTTFT.Float64
@@ -1288,7 +1295,7 @@ func buildWhere(f domain.LogFilter) (string, []any) {
 		add(`EXISTS(SELECT 1 FROM request_observations ro WHERE ro.request_id=logical_requests.id AND ro.session_id=?)`, f.SessionID)
 	}
 	if f.CallerIdentityID != "" {
-		add(`EXISTS(SELECT 1 FROM request_observations ro WHERE ro.request_id=logical_requests.id AND ro.caller_identity_id=?)`, f.CallerIdentityID)
+		add(`COALESCE((SELECT NULLIF(ro.caller_identity_id,'') FROM request_observations ro WHERE ro.request_id=logical_requests.id),'__unknown__')=?`, f.CallerIdentityID)
 	}
 	if f.Search != "" {
 		like := "%" + f.Search + "%"
