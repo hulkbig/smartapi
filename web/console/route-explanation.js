@@ -19,6 +19,8 @@ const create=(tag,className='',text)=>{const node=document.createElement(tag);if
 const svgIcon=name=>{const icon=document.createElementNS(svgNS,'svg');icon.setAttribute('viewBox','0 0 32 32');icon.setAttribute('aria-hidden','true');icon.innerHTML=glyphs[name]||glyphs.provider;return icon;};
 const money=value=>value==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:4}).format(Number(value));
 const compact=value=>value==null?'—':new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1}).format(Number(value));
+const candidateKey=c=>c.candidate_id||JSON.stringify([c.route_step,c.provider_id,c.connection_id,c.upstream_model]);
+const protocolLabels=new Map([['openai-chat','Chat'],['openai-responses','Responses'],['anthropic','Messages'],['openai-images','Images']]);
 
 export function mountRouteExplanation(container,initialDetail={},initialOptions={}) {
   let detail=initialDetail,options=initialOptions,view,disposed=false,playing=false,timer=null,index=0,followLatest=true,visible=true;
@@ -81,23 +83,48 @@ export function mountRouteExplanation(container,initialDetail={},initialOptions=
   }
 
   function drawInventory(){
-    const key=JSON.stringify([options.locale,view.providers.map(p=>[p.key,p.provider_name,p.state,p.candidates.map(c=>[c.candidate_id,c.connection_id,c.connection_name,c.eligible,c.exclusion_reason])])]);
+    const key=JSON.stringify([options.locale,view.providers.map(p=>[p.key,p.route_step,p.provider_name,p.upstream_model,p.override_name,p.inactive,p.state,p.candidates.map(c=>[candidateKey(c),c.connection_name,c.connection_id,c.protocol])])]);
     if(key===inventoryKey)return;
     inventoryKey=key;providerColumn.replaceChildren();providerRefs.clear();
     for(const provider of view.providers){
       const card=create('div','route-provider'),head=create('div','route-provider-head'),logo=create('span','route-provider-logo');logo.append(providerImage(provider));
       const name=create('strong','',provider.provider_name),stepLabel=create('small','',`${t('Step','步骤')} ${provider.route_step||'—'}`),stateLabel=create('span','route-node-state');
-      const caption=create('div');caption.append(name,stepLabel);head.append(logo,caption,stateLabel);card.append(head);
-      const connections=create('div','route-connections'),candidateRefs=new Map();
-      for(const candidate of provider.candidates){
-        const id=candidate.candidate_id||`${candidate.route_step}:${candidate.connection_id}`;
-        const node=create('button','route-connection');node.type='button';
-        const text=create('span','',candidate.connection_name||candidate.connection_id||t('Historical connection','历史连接')),state=create('small');node.append(text,state);
-        node.addEventListener('click',()=>{inspected=id;conditions.open=true;conditionKey='';paintConditions()});
-        connections.append(node);candidateRefs.set(id,{node,state,candidate});
+      name.setAttribute('data-i18n-skip','');
+      const caption=create('div','route-provider-caption'),meta=create('div','route-provider-meta');
+      caption.append(name);
+      if(provider.upstream_model){
+        const model=create('small','route-provider-model',provider.upstream_model);model.setAttribute('data-i18n-skip','');caption.append(model);
       }
-      if(!provider.candidates.length)connections.append(create('span','cell-sub',t('No matching connections','没有匹配的连接')));
-      card.append(connections);providerColumn.append(card);providerRefs.set(provider.key,{card,stateLabel,candidateRefs,provider});
+      meta.append(stepLabel,stateLabel);caption.append(meta);head.append(logo,caption);card.append(head);
+      if(provider.inactive){
+        card.classList.add('inactive');stateLabel.textContent=t('Not used for this request','本次未采用');
+        if(provider.override_name){
+          const rule=create('small','route-inactive-rule',`${t('Routing rule','路由规则')}: `),ruleName=create('span','',provider.override_name);
+          ruleName.setAttribute('data-i18n-skip','');rule.append(ruleName);caption.append(rule);
+        }
+        providerColumn.append(card);
+        continue;
+      }
+      const connections=create('div','route-connections'),candidateRefs=new Map();
+      const entries=provider.candidates.map(candidate=>{
+        const connection=candidate.connection_name||candidate.connection_id||t('Historical connection','历史连接');
+        const label=protocolLabels.get(candidate.protocol)||candidate.protocol||connection;
+        return {candidate,connection,label};
+      });
+      const counts=new Map(),ordinals=new Map();
+      for(const {label} of entries)counts.set(label,(counts.get(label)||0)+1);
+      for(const {candidate,connection,label} of entries){
+        const id=candidateKey(candidate);
+        const ordinal=(ordinals.get(label)||0)+1;ordinals.set(label,ordinal);
+        const chipLabel=counts.get(label)>1?`${label} ${ordinal}`:label;
+        const title=[...new Set([chipLabel,connection,candidate.connection_id].filter(Boolean))].join(' · ');
+        const node=create('button','route-connection');node.type='button';
+        node.setAttribute('data-i18n-skip','');node.append(create('span','',chipLabel));
+        node.addEventListener('click',()=>{inspected=id;filter='all';conditions.open=true;conditionKey='';paintConditions()});
+        connections.append(node);candidateRefs.set(id,{node,title});
+      }
+      if(!provider.candidates.length)connections.append(create('span','cell-sub',provider.state==='no_connections'?t('No matching connections','没有匹配的连接'):t('Connection evidence unavailable','没有连接记录')));
+      card.append(connections);providerColumn.append(card);providerRefs.set(provider.key,{card,stateLabel,candidateRefs});
     }
   }
 
@@ -157,20 +184,29 @@ export function mountRouteExplanation(container,initialDetail={},initialOptions=
     const current=followLatest?view.events.length:Math.min(index+1,view.events.length),stamp=view.lastEvent?.at?new Date(view.lastEvent.at).toLocaleTimeString(options.locale||'en'):'—';
     statusText.textContent=`${followLatest?(view.live?t('Live · ','实时 · '):''):`${current}/${view.events.length} · `}${stamp}${view.eventsTruncated?` · ${view.eventsTruncated} ${t('events omitted','条步骤已省略')}`:''}`;
     heading.textContent=options.title||t('Request explanation','请求解释');
-    subtitle.textContent=`${view.providers.length} ${t('route steps','个路由步骤')} · ${view.candidateCount} ${t('candidate connections','条候选连接')}${view.coverage!=='complete'?` · ${t('Historical coverage is incomplete','历史记录不完整')}`:''}`;
+    const inactiveCount=view.providers.filter(provider=>provider.inactive).length;
+    subtitle.textContent=`${view.providers.length-inactiveCount} ${t('route steps','个路由步骤')} · ${view.candidateCount} ${t('candidate connections','条候选连接')}${inactiveCount?` · ${inactiveCount} ${t('not used','个未采用')}`:''}${view.coverage!=='complete'?` · ${t('Historical coverage is incomplete','历史记录不完整')}`:''}`;
   }
 
   function paintNodes(){
     for(const provider of view.providers){
       const ref=providerRefs.get(provider.key);if(!ref)continue;
-      for(const cls of ['active','selected','failed','attempted'])ref.card.classList.toggle(cls,Boolean(provider[cls]));
+      const failed=provider.selected?provider.candidates.some(c=>c.selected&&c.failed):provider.failed;
+      for(const cls of ['active','selected','attempted'])ref.card.classList.toggle(cls,Boolean(provider[cls]));
+      ref.card.classList.toggle('failed',failed&&!provider.active);
       ref.card.classList.toggle('working',provider.active);ref.card.setAttribute('aria-busy',String(provider.active));
-      ref.stateLabel.textContent=provider.active?t('Processing','处理中'):provider.selected?t('Selected','已选'):provider.state==='no_connections'?t('No connections','无连接'):provider.candidates.some(c=>c.eligible)?t('Candidate','候选'):t('Excluded','已排除');
-      for(const candidate of provider.candidates){const node=ref.candidateRefs.get(candidate.candidate_id||`${candidate.route_step}:${candidate.connection_id}`);if(!node)continue;
-        for(const cls of ['active','selected','failed','attempted'])node.node.classList.toggle(cls,Boolean(candidate[cls]));
-        node.node.classList.toggle('working',candidate.active);
-        node.node.classList.toggle('excluded',!candidate.eligible);
-        node.state.textContent=candidate.active?t('Processing','处理中'):candidate.failed?t('Failed','失败'):candidate.selected?t('Selected','已选'):!candidate.eligible?t('Excluded','排除'):t('Eligible','可选');
+      const excluded=provider.state==='excluded'||(provider.candidates.length>0&&provider.candidates.every(c=>c.eligible===false));
+      ref.stateLabel.textContent=provider.active?t('Processing','处理中'):failed?t('Attempt failed','尝试失败'):provider.selected?t('Selected','已选'):
+        provider.state==='no_connections'?t('No connections','无连接'):provider.candidates.some(c=>c.eligible===true)?t('Candidate','候选'):excluded?t('Excluded','已排除'):t('Not evaluated','未评估');
+      for(const candidate of provider.candidates){const chip=ref.candidateRefs.get(candidateKey(candidate));if(!chip)continue;
+        for(const cls of ['active','selected','attempted'])chip.node.classList.toggle(cls,Boolean(candidate[cls]));
+        chip.node.classList.toggle('failed',candidate.failed&&!candidate.active);
+        chip.node.classList.toggle('working',candidate.active);
+        chip.node.classList.toggle('excluded',candidate.eligible===false);
+        const state=candidate.active?t('Processing','处理中'):candidate.failed?t('Failed','失败'):candidate.selected?t('Selected','已选'):
+          candidate.eligible===true?t('Eligible','可选'):candidate.eligible===false?t('Excluded','排除'):t('Not evaluated','未评估');
+        const description=`${chip.title} · ${state}`;
+        if(chip.node.title!==description){chip.node.title=description;chip.node.setAttribute('aria-label',description)}
       }
     }
     gateway.classList.toggle('recovering',['upstream-failed','recovering'].includes(view.phase));
@@ -180,7 +216,7 @@ export function mountRouteExplanation(container,initialDetail={},initialOptions=
   }
 
   function matches(candidate){
-    if(filter==='all')return true;if(filter==='eligible')return candidate.eligible;if(filter==='excluded')return !candidate.eligible;
+    if(filter==='all')return true;if(filter==='eligible')return candidate.eligible===true;if(filter==='excluded')return candidate.eligible===false;
     if(filter==='active')return candidate.active;if(filter==='failed')return candidate.failed;
     return (candidate.conditions||[]).some(c=>c.condition_code===filter);
   }
@@ -188,30 +224,32 @@ export function mountRouteExplanation(container,initialDetail={},initialOptions=
   function paintConditions(){
     const all=view.providers.flatMap(p=>p.candidates),key=JSON.stringify([all,filter,inspected,options.locale]);if(key===conditionKey)return;conditionKey=key;
     const matching=all.filter(matches);
-    const selected=matching.find(c=>c.candidate_id===inspected)||matching.find(c=>c.selected)||matching[0];
-    conditionsSummary.textContent=`${t('Candidates and conditions','候选与条件')} · ${all.filter(matches).length}/${all.length}`;
+    const selected=matching.find(c=>candidateKey(c)===inspected)||matching.find(c=>c.selected)||matching[0];
+    const selectedId=selected?candidateKey(selected):'';
+    conditionsSummary.textContent=`${t('Candidates and conditions','候选与条件')} · ${matching.length}/${all.length}`;
     const labels={all:t('All candidates','全部候选'),eligible:t('Eligible','可选'),excluded:t('Excluded','已排除'),active:t('Active','激活'),failed:t('Attempt failed','尝试失败')};
     const codes=[...new Set(all.flatMap(c=>(c.conditions||[]).map(x=>x.condition_code)))];
     filterSelect.setAttribute('aria-label',t('Candidate condition filter','候选条件筛选'));
     const nextFilterKey=JSON.stringify([labels,codes]);
     if(nextFilterKey!==filterKey){filterKey=nextFilterKey;filterSelect.replaceChildren();for(const code of [...Object.keys(labels),...codes]){const el=create('option','',labels[code]||code);el.value=code;filterSelect.append(el)}}
     filterSelect.value=filter;
-    const currentIds=new Set(all.map(c=>c.candidate_id));
+    const currentIds=new Set(all.map(candidateKey));
     for(const [id,chip]of choiceRefs)if(!currentIds.has(id)){chip.remove();choiceRefs.delete(id)}
     for(const candidate of all){
-      let chip=choiceRefs.get(candidate.candidate_id);
-      if(!chip){chip=create('button','btn small');chip.type='button';chip.addEventListener('click',()=>{inspected=candidate.candidate_id;conditionKey='';paintConditions()});candidateChoices.append(chip);choiceRefs.set(candidate.candidate_id,chip)}
+      const id=candidateKey(candidate),isInspected=id===selectedId;
+      let chip=choiceRefs.get(id);
+      if(!chip){chip=create('button','btn small');chip.type='button';chip.addEventListener('click',()=>{inspected=id;conditionKey='';paintConditions()});candidateChoices.append(chip);choiceRefs.set(id,chip)}
       chip.textContent=`${candidate.provider_name||candidate.provider_id} · ${candidate.connection_name||candidate.connection_id}`;
-      chip.classList.toggle('primary',candidate.candidate_id===selected?.candidate_id);chip.hidden=!matches(candidate);
+      chip.classList.toggle('primary',isInspected);chip.setAttribute('aria-pressed',String(isInspected));chip.hidden=!matches(candidate);
     }
     conditionContent.replaceChildren();
     if(!all.length){conditionContent.append(create('p','cell-sub',t('Complete candidate snapshots were not recorded for this request.','此请求没有完整的候选快照。')));return}
-    if(!all.some(matches)){conditionContent.append(create('p','cell-sub',t('No matching candidates.','没有匹配的候选。')));return}
+    if(!matching.length){conditionContent.append(create('p','cell-sub',t('No matching candidates.','没有匹配的候选。')));return}
     if(!selected)return;
     const text=create('p','cell-sub',[selected.upstream_model,selected.protocol,selected.exclusion_reason].filter(Boolean).join(' · '));text.setAttribute('data-i18n-skip','');conditionContent.append(text);
     const list=create('dl','route-condition-list');
     const conditionLabels={provider_enabled:['Provider enabled','渠道启用'],connection_enabled:['Connection enabled','连接启用'],credential_available:['Credential available','凭据可用'],authentication:['Authentication','身份认证'],reachability:['Reachability','连通性'],connection_cooldown:['Connection cooldown','连接冷却'],quota:['Quota','配额'],capabilities:['Capabilities','能力匹配'],circuit_breaker:['Circuit breaker','熔断'],model_cooldown:['Model cooldown','模型冷却'],protocol_compatibility:['Protocol compatibility','协议兼容']};
-    const results={pass:t('Pass','通过'),fail:t('Excluded','排除'),unknown:t('Unknown','未知'),not_evaluated:t('Not evaluated','未评估')};
+    const results={pass:t('Pass','通过'),fail:t('Failed','未通过'),unknown:t('Unknown','未知'),not_evaluated:t('Not evaluated','未评估')};
     for(const condition of selected.conditions||[]){const row=create('div',`condition-${condition.result}`),name=create('dt','',conditionLabels[condition.condition_code]?t(...conditionLabels[condition.condition_code]):condition.condition_code),value=create('dd','',results[condition.result]||condition.result);row.append(name,value);if(condition.reason)row.append(create('small','cell-sub',condition.reason));list.append(row)}
     if(!(selected.conditions||[]).length)list.append(create('p','cell-sub',t('Condition evidence is unavailable.','没有记录条件证据。')));
     conditionContent.append(list);
@@ -262,7 +300,6 @@ export function mountRouteExplanation(container,initialDetail={},initialOptions=
     drawInventory();drawSources();paintControls();paintNodes();paintStatus();paintConditions();requestAnimationFrame(position);
   }
   const resize=typeof ResizeObserver!=='undefined'?new ResizeObserver(()=>requestAnimationFrame(position)):null;resize?.observe(stage);
-  providerColumn.addEventListener('scroll',()=>requestAnimationFrame(position),{signal:cleanup.signal,passive:true});
   const intersection=typeof IntersectionObserver!=='undefined'?new IntersectionObserver(entries=>{visible=entries[0]?.isIntersecting!==false;paintControls();if(visible)schedule();else stopTimer();}):null;intersection?.observe(root);
   document.addEventListener('visibilitychange',()=>{paintControls();if(document.hidden)stopTimer();else schedule()},{signal:cleanup.signal});
   const motionChange=event=>{reduced=event.matches;if(reduced){playing=false;stopTimer()}paint()};motionQuery?.addEventListener?.('change',motionChange);
@@ -271,7 +308,7 @@ export function mountRouteExplanation(container,initialDetail={},initialOptions=
     const full=buildRouteViewModel(detail);
     if(previousId!==full.requestId){
       stopTimer();cancelPacket();paintedEvent=null;followLatest=true;playing=false;index=Math.max(0,full.events.length-1);
-      inspected='';inventoryKey='';sourceKey='';conditionKey='';conditions.open=options.mode==='detail';
+      inspected='';inventoryKey='';sourceKey='';conditionKey='';conditions.open=false;
     }
     paint();schedule();
   }

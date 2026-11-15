@@ -67,6 +67,70 @@ func publicRouteSnapshot(trace *domain.TraceRecord) map[string]any {
 	return map[string]any{"schema_version": version, "runtime_revision": runtimeRevision, "coverage": coverage, "captured_at": captured, "route_steps": steps, "candidates": candidates}
 }
 
+type inactiveRequestRouteStep struct {
+	RouteStep     int    `json:"route_step"`
+	ProviderID    string `json:"provider_id"`
+	ProviderName  string `json:"provider_name"`
+	UpstreamModel string `json:"upstream_model"`
+	OverrideName  string `json:"override_name,omitempty"`
+}
+
+// A recorded plan contains only the effective route. Add configured options
+// from its own revision without representing them as evaluated candidates.
+func (s *Server) requestRouteSnapshot(record *domain.RequestRecord, trace *domain.TraceRecord) map[string]any {
+	view := publicRouteSnapshot(trace)
+	snapshot := trace.RouteSnapshot
+	if s.deps.Control == nil || snapshot == nil || snapshot.Coverage != "complete" ||
+		snapshot.RuntimeRevision <= 0 || snapshot.RuntimeRevision != record.RuntimeRevision || record.LogicalModelID == "" {
+		return view
+	}
+	intent, err := s.deps.Control.ConfigRevision(snapshot.RuntimeRevision)
+	if err != nil {
+		return view
+	}
+	index := logicalModelIndex(intent, record.LogicalModelID)
+	if index < 0 {
+		return view
+	}
+	model := intent.LogicalModels[index]
+	names := make(map[string]string, len(intent.Providers))
+	for _, provider := range intent.Providers {
+		names[provider.ID] = provider.Name
+	}
+	seen := make(map[string]bool, len(snapshot.Steps))
+	for _, step := range snapshot.Steps {
+		seen[domain.ProviderModelKey(step.ProviderID, step.UpstreamModel)] = true
+	}
+	var inactive []inactiveRequestRouteStep
+	appendInactive := func(route domain.RouteSpec, ruleName string) {
+		for i, step := range route.Steps {
+			key := domain.ProviderModelKey(step.ProviderID, step.UpstreamModel)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			name := names[step.ProviderID]
+			if name == "" {
+				name = step.ProviderID
+			}
+			inactive = append(inactive, inactiveRequestRouteStep{
+				RouteStep: i + 1, ProviderID: step.ProviderID, ProviderName: name,
+				UpstreamModel: step.UpstreamModel, OverrideName: ruleName,
+			})
+		}
+	}
+	appendInactive(model.DefaultRoute, "")
+	for _, override := range model.Overrides {
+		if override.Enabled && override.Mode == domain.OverrideCustomRoute && override.Route != nil {
+			appendInactive(*override.Route, override.Name)
+		}
+	}
+	if len(inactive) > 0 {
+		view["inactive_route_steps"] = inactive
+	}
+	return view
+}
+
 // Execution decisions append evidence; the initial candidate conditions stay
 // immutable. This projection never reruns eligibility against current state.
 func publicDecisionUpdates(events []domain.ExecutionTraceEvent) []map[string]any {

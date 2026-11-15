@@ -5,7 +5,7 @@ const source=fs.readFileSync(new URL('./app.part13.jsfrag',import.meta.url),'utf
 function setup(saved,matches=false,blocked=false,legacy={}){
  const storage=new Map([...Object.entries(legacy),...(saved?[['ferry.theme',saved]]:[])]);let listener;
  const media={matches,addEventListener(type,fn){assert.equal(type,'change');listener=fn;}};
- const context=vm.createContext({navigator:{language:'zh-CN'},document:{documentElement:{dataset:{}}},matchMedia:()=>media,localStorage:{getItem(k){if(blocked)throw Error();return storage.get(k);},setItem(k,v){if(blocked)throw Error();storage.set(k,v);}},render(){}});
+ const context=vm.createContext({icon:name=>`<svg data-icon="${name}"></svg>`,navigator:{language:'zh-CN'},document:{documentElement:{dataset:{}}},matchMedia:()=>media,localStorage:{getItem(k){if(blocked)throw Error();return storage.get(k);},setItem(k,v){if(blocked)throw Error();storage.set(k,v);}},render(){}});
  vm.runInContext(source+'applyConsolePreferences();',context);
  return {context,storage,theme:()=>context.document.documentElement.dataset.theme,change(value){media.matches=value;listener();},cycle(){context.cycleConsoleTheme();}};
 }

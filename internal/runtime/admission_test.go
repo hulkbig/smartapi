@@ -242,3 +242,51 @@ func waitForQueueDepth(t *testing.T, m *Manager, connectionID string, want int) 
 	}
 	t.Fatalf("queue depth never reached %d", want)
 }
+
+func TestAdmissionObservationKeepsFIFOAndReportsActualDeadline(t *testing.T) {
+	m, id := admissionManager(t, domain.ConcurrencyPolicy{MaxConcurrent: 1, MaxWaitSeconds: 5})
+	release, failure := m.AdmitObserved(context.Background(), id, func(time.Time, time.Time) { t.Error("immediate admission reported a wait") })
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	clientDeadline, _ := ctx.Deadline()
+	observed := make(chan [2]time.Time, 1)
+	done := make(chan *domain.Failure, 1)
+	go func() {
+		finish, err := m.AdmitObserved(ctx, id, func(start, deadline time.Time) {
+			// Reentry proves the observer is not invoked under the manager lock.
+			m.SetConnectionConcurrency("observed-other", nil)
+			observed <- [2]time.Time{start, deadline}
+		})
+		if finish != nil {
+			finish()
+		}
+		done <- err
+	}()
+	select {
+	case times := <-observed:
+		if !times[1].Equal(clientDeadline) || times[0].After(times[1]) {
+			t.Fatalf("wrong wait bounds: %v", times)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("observer blocked")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || err.Type != domain.FailClientCancel {
+			t.Fatalf("cancellation changed: %+v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter leaked")
+	}
+	release()
+	finish, err := m.Admit(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish()
+}

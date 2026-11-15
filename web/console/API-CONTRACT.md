@@ -42,8 +42,8 @@ Only the unversioned `/api/*` surface is a product management API. `/api/v2/*` h
 | `rotateConnectionSecret(providerId,connectionId,secret)` | `POST .../rotate-secret` | High-risk credential replacement |
 | `getRequests(filters)` | `GET /api/requests?...` | Server-filtered request list |
 | `getRequest(id)` | `GET /api/requests/{id}` | Execution Trace |
-| `getApiKeys()` | `GET /api/api-keys` | API Key list |
-| `getApiKey(id)` | `GET /api/api-keys/{id}` | Identity, secret metadata, usage and recent requests |
+| `getApiKeys(window="168h")` | `GET /api/api-keys?window=168h` | Identity-level historical usage, timeline and last activity |
+| `getApiKey(id,window="168h")` | `GET /api/api-keys/{id}?window=168h` | Identity, secret metadata, history, model distribution and recent requests |
 | `createApiKey(input)` | `POST /api/api-keys` | Create + plaintext response |
 | `revealApiKey(id)` | `GET /api/api-keys/{id}/secret` | Explicit administrator reveal of the active secret |
 | `updateApiKey(id,patch)` | `PATCH /api/api-keys/{id}` | Enable/disable identity |
@@ -54,6 +54,7 @@ Only the unversioned `/api/*` surface is a product management API. `/api/v2/*` h
 | `completeConnectionOAuth(...)` | `POST .../oauth/callback` | Complete pasted callback URL |
 | `importConnectionOAuth(...)` | `POST .../oauth/import` | Import official Codex or CLIProxyAPI auth JSON without retaining the raw file |
 | `getConnectionOAuthUsage(..., { refresh })` | `GET .../oauth/usage?refresh=...` | List, detail and editor share account-scoped cached snapshots; entering each surface reads cache first, then refreshes upstream. Concurrent refreshes coalesce; cached values stay visible with a border marquee while loading |
+| `getConnectionUsage(..., { refresh })` | `GET .../usage?refresh=...` | Shared usage for supported Kimi/GLM/Z.ai Coding Plan connections and Codex; Coding Plan windows show reported usage and reset times |
 | `resetCooldowns(scope)` | `POST /api/runtime/clear-cooldown` or `POST /api/models/{model_id}/clear-cooldown` | Empty scope resets all; `provider_id`, `connection_id`, `upstream_model` intersect. Logical-model scope selects its routed supply. Successful resets are immediately persisted. |
 | `getSettings()` / `updateSettings(patch)` | `GET/PATCH /api/settings` | Runtime settings; writes are high-risk |
 | `getOrganizations()` | `GET /api/organizations` | Single-runtime scope boundary |
@@ -408,3 +409,15 @@ read-only. Responses never include credential material. Apply returns per-item r
 with HTTP 207 for partial failures; created providers, connections and client keys are
 disabled. Existing IDs are not overwritten. See [import contract and supported source
 formats](../../docs/guide/credential-import.md) for retry semantics and limitations.
+
+### API key historical usage
+
+The console defaults to 7 days and supports 24 hours / 7 days / 30 days (`24h`, `168h`, `720h`). Each key carries `usage`, `history` and `last_request_at`. `history` contains the exact `from`/`to`, zero-filled `timeline` bins, `tokens_observed_requests`, and global ledger `coverage`; details additionally populate `models`. Finalized logical requests in `[from,to)` are counted once. `requests = succeeded + failed + canceled`; success rate uses all finalized requests as the denominator. In-flight requests appear only in recent activity, not usage totals.
+
+Attribution prefers `caller_identity_id`; only legacy rows lacking that ID fall back to the current key name. Rotation does not split history. Unknown or deleted stable identities must not be attributed to another key by name. `last_request_at` spans all retained requests, independently of the selected statistics window; credential activity can be newer. A missing timestamp means no retained evidence, not a guarantee the key was never used.
+
+Missing usage is not zero. Token totals describe recorded evidence and may be incomplete; the hover reports observed requests / all requests. Coverage remains global because old hourly rollups do not have key identity dimensions. The earliest retained row is an observation, not a guaranteed retention cutoff. List/detail errors remain non-successful responses.
+
+### Model output rate
+
+Logical model `traffic` and route steps expose nullable `output_tokens_per_second` plus `speed_samples`. Rates use successful finalized samples with valid elapsed time and complete usage (or positive legacy output without usage-state metadata): sum of output tokens divided by sum of elapsed seconds. Logical request duration includes waiting and recovery; actual upstream duration uses successful attempt latency, grouped by provider + upstream model. These are observed end-to-end rates, not isolated decoding speed. Missing evidence yields null, while a known zero-output completion can produce zero. The model list shows both logical and all default upstream route rates, with period and sample count on hover.

@@ -16,7 +16,7 @@ PAGES = {
     'docs/session-observability.en.md':'en/guide/session-observability.md',
     'docs/development.md':'development.md', 'docs/development.en.md':'en/development.md',
 }
-for guide in ('performance','docker','faq','troubleshooting','hermes','autoreset','logical-models','credential-import','codex-usage-protection'):
+for guide in ('monitoring','performance','docker','faq','troubleshooting','hermes','autoreset','logical-models','credential-import','codex-usage-protection'):
     PAGES[f'docs/guide/{guide}.md']=f'guide/{guide}.md'
     PAGES[f'docs/guide/{guide}.en.md']=f'en/guide/{guide}.md'
 

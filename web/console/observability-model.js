@@ -37,6 +37,7 @@ export function eventOrder(events=[]) {
 }
 
 const activeKey = (provider,connection,step) => `${step||0}\0${provider||''}\0${connection||''}`;
+const routeIdentity = step => JSON.stringify([step.provider_id,step.upstream_model]);
 
 export function buildRouteViewModel(detail={},selectedSeq=Infinity) {
   const request=detail.client_request || detail.raw || detail;
@@ -52,7 +53,9 @@ export function buildRouteViewModel(detail={},selectedSeq=Infinity) {
   for(const candidate of candidates) {
     const key=`${candidate.route_step||0}:${candidate.provider_id||'unknown'}`;
     if(!nodes.has(key))nodes.set(key,{key,route_step:candidate.route_step||0,provider_id:candidate.provider_id||'',provider_name:candidate.provider_name||candidate.provider_id||'Historical candidate',candidates:[],active:false,selected:false,attempted:false,failed:false});
-    nodes.get(key).candidates.push(candidate);
+    const node=nodes.get(key);
+    if(!node.upstream_model && candidate.upstream_model)node.upstream_model=candidate.upstream_model;
+    node.candidates.push(candidate);
   }
   const latest=!Number.isFinite(selectedSeq);
   const status=request.status || String(detail.result||'').toLowerCase();
@@ -115,9 +118,20 @@ export function buildRouteViewModel(detail={},selectedSeq=Infinity) {
       node.selected ||= candidate.selected;node.active ||= candidate.active;node.attempted ||= candidate.attempted;node.failed ||= candidate.failed;
     }
   }
+  const providers=[...nodes.values()];
+  const seenRoutes=new Set(providers.map(routeIdentity));
+  // Inactive steps describe the saved route, with no candidate or playback evidence.
+  for(const step of snapshot.inactive_route_steps || []) {
+    const identity=routeIdentity(step);
+    if(seenRoutes.has(identity))continue;
+    seenRoutes.add(identity);
+    const {route_step,provider_id,provider_name,upstream_model,override_name}=step;
+    providers.push({key:`inactive:${identity}`,route_step,provider_id,provider_name:provider_name||provider_id||'Unknown Provider',upstream_model,override_name,
+      inactive:true,candidates:[],active:false,selected:false,attempted:false,failed:false});
+  }
   return {requestId:request.id || detail.id || '',sessionId:request.session_id || detail.sessionId || null,
     revision:detail.traceRevision ?? detail.trace_revision ?? request.observation?.trace_revision ?? 0,
-    coverage:snapshot.coverage || 'legacy',providers:[...nodes.values()],candidateCount:candidates.length,
+    coverage:snapshot.coverage || 'legacy',providers,candidateCount:candidates.length,
     events,visibleEvents:visible,lastEvent,phase,packet,selected,dispatched,
     work:{gateway:delivering?'delivering':gatewayWork,source:delivering?'delivering':null,upstream:dispatched},
     eventsTruncated:Number(detail.eventsTruncated ?? detail.events_truncated ?? 0),

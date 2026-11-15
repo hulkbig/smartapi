@@ -2,6 +2,7 @@ package management
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,7 +13,66 @@ import (
 
 	"ferry/internal/controlstore"
 	"ferry/internal/domain"
+	sched "ferry/internal/scheduler"
 )
+
+func TestRequestRouteShowsUnusedOptionsFromRecordedRevision(t *testing.T) {
+	f := newV2APIFixture(t)
+	before := nativeV2Config()
+	before.Providers[0].Name = "Historical Provider"
+	before.LogicalModels[0].Overrides = []domain.OverrideSpec{{
+		ID: "tools-route", Name: "Requests with tools", Enabled: true,
+		Required: domain.Requirements{Tools: true}, Mode: domain.OverrideCustomRoute,
+		Route: &domain.RouteSpec{Steps: []domain.RouteStep{{ProviderID: "provider-a", UpstreamModel: "upstream-model-2"}}},
+	}}
+	if err := f.server.deps.Publish(before); err != nil {
+		t.Fatal(err)
+	}
+	revision := f.server.deps.Scheduler.Snapshot().Version
+	result, failure := f.server.deps.Scheduler.Execute(context.Background(), &domain.RequestContract{
+		Model: "smart", Protocol: domain.ProtocolOpenAIChat, Origin: domain.ProtocolOpenAIChat,
+		Messages: []domain.Message{{Role: domain.RoleUser, Blocks: []domain.Block{{Kind: domain.BlockText, Text: "hello"}}}},
+	}, sched.RequestMeta{PresentedCredential: "sk-ferry-initial"})
+	if failure != nil {
+		t.Fatalf("execute default route: %v", failure)
+	}
+	// Remove the rule and rename the provider before inspecting the request.
+	after := nativeV2Config()
+	if err := f.server.deps.Publish(after); err != nil {
+		t.Fatal(err)
+	}
+	if f.server.deps.Scheduler.Snapshot().Version <= revision {
+		t.Fatal("test did not advance the active revision")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec, response := f.do(http.MethodGet, "/api/requests/"+result.LedgerRequestID, nil)
+		if route, ok := response["route_snapshot"].(map[string]any); ok && route["coverage"] == "complete" {
+			requireStatus(t, rec, http.StatusOK)
+			if route["runtime_revision"] != float64(revision) {
+				t.Fatalf("request revision changed: %v", route)
+			}
+			effective := route["route_steps"].([]any)
+			if len(effective) != 1 || effective[0].(map[string]any)["upstream_model"] != "upstream-model" {
+				t.Fatalf("effective route was changed: %v", effective)
+			}
+			inactive, _ := route["inactive_route_steps"].([]any)
+			if len(inactive) != 1 {
+				t.Fatalf("expected one inactive route option: %v", route)
+			}
+			step := inactive[0].(map[string]any)
+			if step["provider_id"] != "provider-a" || step["provider_name"] != "Historical Provider" ||
+				step["upstream_model"] != "upstream-model-2" || step["override_name"] != "Requests with tools" {
+				t.Fatalf("unexpected historical option: %v", step)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("request plan did not persist: %s", rec.Body.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
 
 func TestObservationHTTPRealSessionSummaryAndHistoricalCandidates(t *testing.T) {
 	f := newV2APIFixture(t)

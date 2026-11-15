@@ -13,6 +13,7 @@ const drivers=[
 const view=(driver='claude',account='personal',status='connected',extra={})=>({driver,account,status,base_url:drivers.find(d=>d.id===driver)?.base_url||'',protocol:drivers.find(d=>d.id===driver)?.protocol||'',credential_ref:`native-oauth:${driver}:${account}`,...extra});
 const plain=value=>JSON.parse(JSON.stringify(value));
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
+const p1=await fs.readFile(new URL('./app.part1.jsfrag',import.meta.url),'utf8');
 const p9=await fs.readFile(new URL('./app.part9.jsfrag',import.meta.url),'utf8');
 const p12=await fs.readFile(new URL('./app.part12.jsfrag',import.meta.url),'utf8');
 const p14=await fs.readFile(new URL('./app.part14.jsfrag',import.meta.url),'utf8');
@@ -20,7 +21,8 @@ const escape=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&l
 function harness(){
  const listeners=[],keyListeners=[],requests=[],state={auth:{authenticated:true},modal:{type:'add-provider'},wizard:{},settings:{},models:[]};
  const adapter={getNativeOAuthDrivers:async()=>drivers,getNativeOAuthStatus:async(d,a)=>view(d,a,'disconnected'),beginNativeOAuth:async(d,a,f)=>{requests.push({action:'begin',fields:f});return view(d,a,'pending',{url:'https://signin.example/authorize?state=public',user_code:'USER'})},completeNativeOAuth:async(d,a,c)=>{requests.push({action:'complete',callback:c});return view(d,a)},disconnectNativeOAuth:async(d,a)=>view(d,a,'disconnected')};
- const c=vm.createContext({state,adapter,console,URL,TextEncoder,Date,Map,Set,setInterval,clearInterval,queueMicrotask(){},demoMode:false,esc:escape,renderPortalPreservingView(){},renderPortal(){},providerUnlistedSection:()=>'',providerModelSyncDraftFingerprint:()=>'',portal:{querySelector:()=>null},document:{addEventListener:(_type,fn)=>keyListeners.push(fn)},app:{addEventListener:(type,fn)=>listeners.push(fn)}});
+ const c=vm.createContext({state,adapter,console,URL,TextEncoder,Date,Map,Set,setInterval,clearInterval,queueMicrotask(){},demoMode:false,esc:escape,nt:en=>en,icon:()=>'',renderPortalPreservingView(){},renderPortal(){},providerUnlistedSection:()=>'',providerModelSyncDraftFingerprint:()=>'',portal:{querySelector:()=>null},document:{addEventListener:(_type,fn)=>keyListeners.push(fn)},app:{addEventListener:(type,fn)=>listeners.push(fn)}});
+ vm.runInContext(p1.slice(p1.indexOf('function uiHint('),p1.indexOf('const resourceHash')),c);
  vm.runInContext(p9.slice(p9.indexOf('const providerProtocolMeta='),p9.indexOf('function addProviderModal(')),c);
  vm.runInContext(p12.slice(0,p12.indexOf('function activeCodexProviderConnection(')),c);
  vm.runInContext(p12.slice(p12.indexOf('function providerEditorCanProbe('),p12.indexOf('function providerModelSyncDraftValue(')),c);

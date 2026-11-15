@@ -1,6 +1,20 @@
   return `<div class="route-row model-sequence-row"><div class="route-name"><span class="route-sequence">${i+1}</span><div class="provider-logo ${r.id?.includes('codex')?'codex':r.id?.includes('openrouter')?'router':'openai'}">${(r.provider||'?')[0]}</div><div><div class="cell-title">${esc(r.provider)}</div><div class="cell-sub">${esc(r.model)}</div></div>${badge(routeAvailabilityLabel(r.status))}</div><div class="route-meta"><strong>${i===0?'Starts here':`After route ${i}`}</strong><small>${fmtPct(r.serving)} serving</small><small>${(r.recoverOn||[]).length?`Advance on: ${esc(r.recoverOn.join(', '))}`:'No failure progression'}</small></div></div>`;
 }
-async function loadAndRenderModel(id) { try { state.modelCache.set(id, await adapter.getModel(id)); render(); } catch(e){showToast(e.message,'error')} }
+function detailLoadState(kind,id){
+  state.detailLoads||=new Map();const key=JSON.stringify([kind,id]);
+  if(!state.detailLoads.has(key))state.detailLoads.set(key,{error:null,promise:null});
+  return state.detailLoads.get(key);
+}
+function detailFailure(kind,id){
+  const error=detailLoadState(kind,id).error;if(!error)return '';
+  return `<section class="card panel"><h2>${error.status===404?'Not found':'Details unavailable'}</h2><p role="alert">${esc(error.message)}</p><div class="row-actions"><button class="btn" data-action="retry-detail" data-kind="${esc(kind)}" data-id="${esc(id)}">${icon('refresh')} Retry</button><a class="btn" href="#/${esc(kind)}" data-nav>Back to list</a></div></section>`;
+}
+async function loadResourceDetail(kind,id,load,cache){
+  const epoch=state.sessionEpoch||0,entry=detailLoadState(kind,id);if(entry.promise||entry.error)return entry.promise;
+  entry.promise=Promise.resolve().then(load).then(value=>{if(epoch===(state.sessionEpoch||0))cache.set(id,value)}).catch(error=>{entry.error=error}).finally(()=>{entry.promise=null;const route=currentRoute();if(route.section===kind&&route.id===id)render()});
+  return entry.promise;
+}
+async function loadAndRenderModel(id){return loadResourceDetail('models',id,()=>adapter.getModel(id),state.modelCache)}
 
 function providerIsEnabled(provider){return provider?.raw?.enabled ?? provider?.enabled ?? provider?.status!=='Unavailable'}
 function connectionIsEnabled(connection){return connection?.raw?.enabled ?? connection?.enabled ?? connection?.status!=='Unavailable'}
@@ -8,7 +22,7 @@ function providerModels(provider){return [...(provider?.servingModels||[])].filt
 function providerImpactText(provider){const models=providerModels(provider);return models.length?`Logical model routes affected: ${models.join(', ')}.`:'No logical model route currently references this provider.'}
 function connectionModels(connection){return (connection?.models||[]).map(model=>model.upstream_model).filter(Boolean)}
 function providerUpstreamModels(provider){return [...new Set([...(provider?.upstreamModels||[]),...(provider?.connectionItems||[]).flatMap(connectionModels)])].filter(Boolean)}
-function providerCredentialLabel(provider){const items=provider?.connectionItems||[];if(!items.length)return 'Not configured';if(items.length>1)return `${items.length} legacy credentials`;return items[0].type||'Configured'}
+function providerCredentialLabel(provider){const items=provider?.connectionItems||[];if(!items.length)return 'Not configured';const count=new Set(items.map(c=>c.quotaGroupId||c.raw?.quota_group_id||c.raw?.credential_ref||c.id)).size;return `${count} ${count===1?'account':'accounts'}`}
 function connectionTestKey(providerId,connectionId){return JSON.stringify([providerId,connectionId])}
 function connectionTestState(providerId,connectionId){return typeof state==='undefined'||!state.connectionTests?null:state.connectionTests.get(connectionTestKey(providerId,connectionId))||null}
 function connectionRecoveryCopy(connection){
@@ -26,25 +40,72 @@ function providerRecoveryPanel(provider,connections=provider?.connectionItems||[
   const affected=connections.map(connection=>({connection,recovery:connectionRecoveryCopy(connection)})).filter(item=>item.recovery);
   if(!affected.length)return '';
   const tone=affected.some(item=>item.recovery.tone==='red')?'red':'orange';
-  return `<div class="notice ${tone} provider-recovery-notice"><strong>${affected.length===connections.length?'Provider recovery active':'Provider capacity reduced'}</strong><span>${affected.map(({connection,recovery})=>`${esc(connection.name)}: ${esc(recovery.detail)}`).join('<br>')}</span></div>`;
+  return `<div class="notice ${tone} provider-recovery-notice"><strong>${affected.length===connections.length?'Provider recovery active':'Provider capacity reduced'}</strong><span>${affected.map(({connection,recovery})=>`<span data-recovery-clock="${esc(connectionTestKey(provider.id,connection.id))}">${esc(connection.name)}: ${esc(recovery.detail)}</span>`).join('<br>')}</span></div>`;
 }
 function connectionTestResultPanel(providerId,connectionId){
   const test=connectionTestState(providerId,connectionId);if(!test)return '';
-  if(test.loading)return `<div class="notice blue test-result-panel"><strong><span class="spinner"></span> Testing connection…</strong><span>${esc(test.model||'Selected upstream model')} · ${Math.max(0,Math.floor((Date.now()-test.startedAt)/1000))}s elapsed. The result will remain here.</span></div>`;
+  if(test.loading)return `<div class="notice blue test-result-panel"><strong><span class="spinner"></span> Testing connection…</strong><span data-test-clock="${esc(connectionTestKey(providerId,connectionId))}">${esc(test.model||'Selected upstream model')} · ${Math.max(0,Math.floor((Date.now()-test.startedAt)/1000))}s elapsed. The result will remain here.</span></div>`;
   const result=test.result||{},ok=Boolean(result.ok),detail=ok?`Validated ${result.tested_model||'the selected model'} over ${result.protocol||'its native protocol'} in ${result.latency_ms}ms.`:`${result.failure?.message||test.error||'Connection validation failed.'}${result.tested_model?` Tested ${result.tested_model} over ${result.protocol}.`:''}`;
   return `<div class="notice ${ok?'green':'red'} test-result-panel"><strong>${ok?'Connection test passed':'Connection test failed'}</strong><span>${esc(detail)}</span></div>`;
 }
-function providerIsCodex(p){return p?.raw?.type==='cliproxy-codex'||p?.type==='cliproxy-codex'||p?.logo==='codex'}
-function providerCodexUsageKey(providerId,connectionId){return JSON.stringify([providerId,connectionId])}
+function updateProviderTimers(){
+  if(document.hidden)return;
+  const connections=new Map();
+  for(const provider of state.providers||[])for(const connection of provider.connectionItems||[])connections.set(connectionTestKey(provider.id,connection.id),connection);
+  for(const [providerId,entry] of state.providerCache)for(const connection of entry.connections||[])connections.set(connectionTestKey(providerId,connection.id),connection);
+  const update=(node,text)=>{
+    // Replace only the clock text; localization keeps the English source per text node.
+    if(node.dataset.clockSource===text)return;
+    node.dataset.clockSource=text;
+    node.textContent=text;
+    localizeDOM(node);
+  };
+  document.querySelectorAll('[data-provider-clock]').forEach(node=>{
+    const timestamp=node.dataset.providerClock?Number(node.dataset.providerClock):null,clock=providerClockState(timestamp,node.dataset.clockKind);
+    const label=node.querySelector('[data-clock-text]');if(label&&label.textContent!==clock.text)label.textContent=clock.text;
+    for(const tone of ['unknown','due','soon','today','near','normal'])node.classList.toggle(tone,tone===clock.tone);
+  });
+  document.querySelectorAll('[data-recovery-clock]').forEach(node=>{
+    const connection=connections.get(node.dataset.recoveryClock);
+    if(!connection)return;
+    const recovery=connectionRecoveryCopy(connection);
+    if(recovery)update(node,node.hasAttribute('data-recovery-detail')?recovery.detail:`${connection.name}: ${recovery.detail}`);
+  });
+  document.querySelectorAll('[data-test-clock]').forEach(node=>{
+    const test=state.connectionTests.get(node.dataset.testClock);
+    if(test?.loading)update(node,`${test.model||'Selected upstream model'} · ${Math.max(0,Math.floor((Date.now()-test.startedAt)/1000))}s elapsed. The result will remain here.`);
+  });
+}
+function providerIsCodex(p){return p?.raw?.type!=null?p.raw.type==='cliproxy-codex':p?.type==='cliproxy-codex'||p?.logo==='codex'}
+function providerUsageConnections(p,connections=p?.connectionItems||[]){
+  return providerIsCodex(p)?connections:connections.filter(connection=>adapter.codingUsageKind(p,connection));
+}
+function providerCodexUsageKey(providerId,connectionId){
+  const detail=state.providerCache?.get(providerId),provider=state.providers?.find(p=>p.id===providerId);
+  const connection=(detail?.connections||provider?.connectionItems||[]).find(c=>c.id===connectionId);
+  const group=connection?.quotaGroupId||connection?.raw?.quota_group_id;
+  return JSON.stringify(group?['quota',group]:[providerId,connectionId]);
+}
+function providerUsageGroups(provider,connections=provider?.connectionItems||[]){
+  const groups=new Map();
+  for(const connection of providerUsageConnections(provider,connections)){
+    const groupId=connection.quotaGroupId||connection.raw?.quota_group_id;
+    const key=groupId||JSON.stringify([provider.id,connection.id]);
+    if(!groups.has(key))groups.set(key,{id:key,confirmed:Boolean(groupId),connection,members:[],protocols:[]});
+    const group=groups.get(key);group.members.push(connection);
+    for(const model of connection.models||[])for(const protocol of model.protocols||[])if(!group.protocols.includes(protocol))group.protocols.push(protocol);
+  }
+  return [...groups.values()];
+}
 function providerCodexUsageEntry(providerId,connectionId){
   const key=providerCodexUsageKey(providerId,connectionId);
-  if(!state.providerCodexUsage.has(key))state.providerCodexUsage.set(key,{usage:null,loading:false,error:'',loaded:false,promise:null,refresh:false});
-  return state.providerCodexUsage.get(key);
+  if(!state.providerCodexUsage.has(key))state.providerCodexUsage.set(key,{usage:null,loading:false,error:'',loaded:false,promise:null,refresh:false,members:new Set()});
+  const entry=state.providerCodexUsage.get(key);entry.members.add(JSON.stringify([providerId,connectionId]));return entry;
 }
 function invalidateProviderCodexUsage(providerId,connectionId){
-  for(const key of state.providerCodexUsage.keys()){
-    const [provider,connection]=JSON.parse(key);
-    if((!providerId||provider===providerId)&&(!connectionId||connection===connectionId))state.providerCodexUsage.delete(key);
+  const currentKey=connectionId?providerCodexUsageKey(providerId,connectionId):null;
+  for(const [key,entry] of state.providerCodexUsage){
+    if(!providerId||key===currentKey||[...entry.members].some(member=>{const [provider,connection]=JSON.parse(member);return provider===providerId&&(!connectionId||connection===connectionId)}))state.providerCodexUsage.delete(key);
   }
 }
 function renderProviderUsageViews(){
@@ -64,7 +125,8 @@ async function loadSharedCodexUsage(providerId,connectionId,{refresh=false}={}){
   }
   if(!refresh&&entry.loaded)return entry.usage;
   entry.loading=true;entry.error='';entry.refresh=refresh;
-  entry.promise=Promise.resolve().then(()=>adapter.getConnectionOAuthUsage(providerId,connectionId,{refresh})).then(usage=>{entry.usage=usage;return usage}).catch(error=>{entry.error=error.message||'Unable to query Codex usage.'}).finally(()=>{
+  const membership=JSON.parse(key),options={refresh,...(membership[0]==='quota'?{quotaGroupId:membership[1]}:{})};
+  entry.promise=Promise.resolve().then(()=>typeof adapter.getConnectionUsage==='function'?adapter.getConnectionUsage(providerId,connectionId,options):adapter.getConnectionOAuthUsage(providerId,connectionId,{refresh})).then(usage=>{if(state.providerCodexUsage.get(key)===entry)entry.usage=usage;return usage}).catch(async error=>{if(state.providerCodexUsage.get(key)!==entry)return;entry.error=error.message||'Unable to query subscription usage.';if(error.status===409){entry.usage=null;try{const data=await adapter.getProvider(providerId);if(state.providerCodexUsage.get(key)!==entry)return;state.providerCache.set(providerId,data);state.providers=(state.providers||[]).map(p=>p.id===providerId?data.provider:p);invalidateProviderCodexUsage(providerId,connectionId);renderProviderUsageViews()}catch{}}}).finally(()=>{
     entry.loading=false;entry.loaded=true;entry.promise=null;
     if(state.providerCodexUsage.get(key)===entry)renderProviderUsageViews();
   });
@@ -72,38 +134,92 @@ async function loadSharedCodexUsage(providerId,connectionId,{refresh=false}={}){
   return entry.promise;
 }
 let providerQuotaView = '';
-function refreshQuotaOnEntry(view,accounts){
-  if(providerQuotaView===view||!accounts.length)return;
+let providerQuotaEntries = new Set();
+function refreshQuotaOnEntry(view,accounts=(state.providers||[]).flatMap(p=>providerUsageConnections(p).map(c=>({providerId:p.id,connectionId:c.id})))){
+  // Refresh new or invalidated accounts on the same view without refreshing
+  // its other accounts again. Navigating to a view refreshes all its accounts.
+  const previous=providerQuotaView===view?providerQuotaEntries:new Set();
   providerQuotaView=view;
-  queueMicrotask(()=>Promise.all(accounts.map(async({providerId,connectionId})=>{
+  providerQuotaEntries=new Set();
+  const pending=[];
+  for(const {providerId,connectionId} of accounts){
     const entry=providerCodexUsageEntry(providerId,connectionId);
-    if(entry.promise&&entry.refresh)return entry.promise;
+    if(!previous.has(entry)&&!providerQuotaEntries.has(entry))pending.push({providerId,connectionId,entry});
+    providerQuotaEntries.add(entry);
+  }
+  if(!pending.length)return;
+  queueMicrotask(()=>Promise.all(pending.map(async({providerId,connectionId,entry})=>{
+    const key=providerCodexUsageKey(providerId,connectionId);
+    if(state.providerCodexUsage.get(key)!==entry||entry.promise&&entry.refresh)return;
     await loadSharedCodexUsage(providerId,connectionId);
-    return loadSharedCodexUsage(providerId,connectionId,{refresh:true});
+    if(state.providerCodexUsage.get(key)===entry)return loadSharedCodexUsage(providerId,connectionId,{refresh:true});
   })).catch(()=>{}));
 }
 function codexUsagePercent(window){if(window?.used_percent==null||window.used_percent==='')return null;const value=Number(window.used_percent);if(!Number.isFinite(value))return null;const used=Math.max(0,Math.min(100,value));return used.toFixed(used%1?1:0)}
+function providerUsageRefreshButton(providerId,connectionId,loading){
+  return `<button type="button" class="btn small usage-refresh" aria-busy="${loading}" data-action="provider-usage-refresh" data-provider="${esc(providerId)}" data-connection="${esc(connectionId)}" ${loading?'disabled':''}><span class="usage-refresh-icon" aria-hidden="true">${icon('refresh')}</span><span>${loading?'Refreshing…':'Refresh usage'}</span></button>`;
+}
 function providerCodexUsagePills(p){
-  if(!providerIsCodex(p))return '';
-  return (p.connectionItems||[]).map(c=>{
+  return providerUsageGroups(p).map(group=>{
+    const c=group.connection;
     const entry=providerCodexUsageEntry(p.id,c.id),usage=entry.usage;
-    return `<section class="provider-list-usage" data-quota-owner="${esc(providerCodexUsageKey(p.id,c.id))}" aria-label="${esc(p.name)} subscription usage" aria-busy="${entry.loading}"><header class="provider-usage-heading"><div><span class="provider-usage-kicker">Subscription usage</span><span class="cell-sub">${esc(c.account||c.name||c.id)}</span></div><button class="btn small usage-refresh" aria-busy="${entry.loading}" data-action="provider-usage-refresh" data-provider="${esc(p.id)}" data-connection="${esc(c.id)}" ${entry.loading?'disabled':''}><span class="usage-refresh-icon" aria-hidden="true">${icon('refresh')}</span><span>${entry.loading?'Refreshing…':'Refresh usage'}</span></button></header>${codexUsageView(usage,{providerId:p.id,connectionId:c.id})}${entry.error?`<p class="cell-sub danger" role="status">Refresh failed: ${esc(entry.error)}. ${usage?'Showing the last cached snapshot.':''}</p>`:''}</section>`;
+    const body=providerIsCodex(p)?codexUsageView(usage,{providerId:p.id,connectionId:c.id}):codingUsageView(usage);
+    const error=entry.error?`<p class="cell-sub danger" role="status"><span>Usage refresh failed</span>: <span data-i18n-skip>${esc(entry.error)}</span>${usage?' · <span>Showing the last cached snapshot.</span>':''}</p>`:'';
+    return `<section class="provider-list-usage" data-quota-owner="${esc(providerCodexUsageKey(p.id,c.id))}" aria-label="${esc(p.name)} subscription usage" aria-busy="${entry.loading}"><header class="provider-usage-heading"><div><span class="provider-usage-kicker">Subscription usage</span><span class="cell-sub">${esc(c.account||c.name||c.id)}</span>${providerQuotaMembership(p,group)}</div>${providerUsageRefreshButton(p.id,c.id,entry.loading)}</header>${body}${error}</section>`;
   }).join('');
 }
 async function loadProviderListCodexUsage(){
-  await Promise.all((state.providers||[]).filter(providerIsCodex).flatMap(p=>(p.connectionItems||[]).map(c=>loadSharedCodexUsage(p.id,c.id))));
+  await Promise.all((state.providers||[]).flatMap(p=>providerUsageConnections(p).map(c=>loadSharedCodexUsage(p.id,c.id))));
+}
+
+function providerQuotaMembership(p,group){
+  const sharedProviders=(state.providers||[]).filter(other=>other.id!==p.id&&(other.connectionItems||[]).some(c=>(c.quotaGroupId||c.raw?.quota_group_id)===group.id));
+  const protocols=group.protocols.map(value=>`<span class="badge">${esc(value)}</span>`).join('');
+  const shared=group.members.length>1||sharedProviders.length;
+  const affected=group.members.filter(c=>connectionIsEnabled(c)&&['Unavailable','Cooling','Exhausted','Recovering'].includes(c.status)).length;
+  const label=shared?'Shared quota':group.confirmed?'Credential quota':'Sharing unconfirmed';
+  const detail=shared?[...group.members.map(c=>`${c.name||c.id}: ${connectionIsEnabled(c)?c.status||'Unknown':'Disabled'}`),...sharedProviders.map(p=>p.name)].join(' · '):group.confirmed?'Same credential and quota endpoint.':'No verified shared quota identity.';
+  return `<div class="quota-membership">${protocols}<span>${esc(label)}</span>${affected?`<span class="badge orange">${affected} ${nt('need attention','个连接异常')}</span>`:''}${uiHint(label,detail,shared?'share':'info')}</div>`;
+}
+function providerResetAt(window,observedAt){const at=Number(window?.reset_at),after=Number(window?.reset_after_seconds),observed=Date.parse(observedAt);return at>0?at*1000:Number.isFinite(after)&&after>=0&&Number.isFinite(observed)?observed+after*1000:null}
+function providerClockState(timestamp,kind='reset',now=Date.now()){
+ if(!Number.isFinite(timestamp)||timestamp<=0)return {tone:'unknown',text:kind==='next'?nt('Next —','下次 —'):nt('Reset —','重置 —')};
+ const seconds=Math.ceil((timestamp-now)/1000);
+ if(seconds<=0)return {tone:'due',text:kind==='next'?nt('Sync due','待同步'):nt('Reset due','待确认重置')};
+ const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60);
+ const remaining=days?`${days}${nt('d','天')} ${hours}${nt('h','小时')}`:hours?`${hours}${nt('h','小时')} ${minutes}${nt('m','分')}`:minutes?`${minutes}${nt('m','分')}`:nt('<1m','<1分');
+ return {tone:kind==='next'?'normal':seconds<=3600?'soon':seconds<=86400?'today':seconds<=259200?'near':'normal',text:(kind==='next'?nt('Next ','下次 '):nt('Reset ','重置 '))+remaining};
+}
+function providerClock(timestamp,kind='reset'){
+ const clock=providerClockState(timestamp,kind),help=(kind==='next'?nt('Next model catalog sync: ','下次模型目录同步：'):nt('Quota resets: ','额度重置：'))+(timestamp?new Date(timestamp).toLocaleString(consoleLocale):nt('Not reported','未报告'));
+ return `<span class="provider-list-clock ${clock.tone}" data-provider-clock="${timestamp??''}" data-clock-kind="${kind}" data-tooltip="${esc(help)}" data-tooltip-literal tabindex="0">${icon(kind==='next'?'refresh':'clock')}<span data-clock-text data-i18n-skip>${esc(clock.text)}</span></span>`;
+}
+function providerNextSync(p){const sync=p.raw?.model_sync;if(!providerIsEnabled(p)||sync?.status==='disabled'||state.settings?.scheduled_model_sync_enabled===false)return `<span class="provider-list-clock muted">${icon('clock')}${nt('Sync paused','同步暂停')}</span>`;const at=Date.parse(sync?.next_run_at);return providerClock(Number.isFinite(at)?at:null,'next')}
+
+function providerQuotaSummary(p,group){
+  if(!group)return '<span class="cell-sub">Not supported</span>';
+  const c=group.connection,entry=providerCodexUsageEntry(p.id,c.id),usage=entry.usage;
+  const windows=(Array.isArray(usage?.windows)?usage.windows:[usage?.rate_limit?.primary_window,usage?.rate_limit?.secondary_window]).filter(w=>w&&typeof w==='object');
+  const shared=group.members.length>1,help=[group.protocols.join(' / '),usage?.observed_at?codexUsageDate(usage.observed_at):'',shared?nt(`${group.members.length} connections share this quota`,`${group.members.length} 个连接共享此额度`):''].filter(Boolean).join(' · ');
+  return `<div class="quota-row-inline" data-quota-owner="${esc(group.id)}"><div class="quota-account-windows">${windows.map(w=>{const value=codingUsagePercent(w),label=w.label||codexUsageWindowLabel(w);return `<div class="quota-compact-window ${value>=90?'warning':'normal'}"><span class="quota-window-label" title="${esc(label)}">${esc(label)}</span><strong>${value===null?'—':`${Math.round(value)}%`}</strong><span class="quota-meter" role="meter" aria-label="${esc((c.account||c.name||c.id)+' '+label)}" aria-valuemin="0" aria-valuemax="100" ${value===null?'aria-valuetext="Unknown"':`aria-valuenow="${value}"`} data-tooltip="${esc(help)}">${value===null?'':`<i style="width:${value}%"></i>`}</span>${providerClock(providerResetAt(w,usage?.observed_at))}</div>`}).join('')||`<span class="cell-sub">${nt('No usage data','暂无额度数据')}</span>`}</div><div class="quota-row-actions">${shared?uiHint('Shared quota',help,'share'):''}${uiAction('refresh','Refresh usage','provider-usage-refresh',{'provider':p.id,'connection':c.id},entry.loading)}</div></div>${entry.error?`<span class="quota-account-error" role="status">${usage?nt('Refresh failed · previous snapshot','刷新失败 · 上次数据'):nt('Refresh failed','刷新失败')}</span>`:''}`;
+}
+function providerTableRow(p,status){
+  const enabled=providerIsEnabled(p),first=p.connectionItems?.[0],testing=first&&connectionTestState(p.id,first.id)?.loading,t=p.raw?.traffic;
+  const samples=Number(t?.requests||0),success=Number(t?.direct_traffic||0)+Number(t?.recovery_traffic||0);
+  const groups=providerUsageGroups(p),rows=groups.length?groups:[null],span=rows.length>1?` rowspan="${rows.length}"`:'';
+  return rows.map((group,index)=>{
+    const c=group?.connection,affected=group?.members.filter(item=>connectionIsEnabled(item)&&['Unavailable','Cooling','Exhausted','Recovering'].includes(item.status)).length;
+    return `<tr class="provider-account-row ${index?'provider-account-continuation':''}">${index?'':`<td class="provider-identity-cell" data-label="Provider"${span}><a class="cell-title" href="${resourceHash('providers',p.id)}" data-tooltip-literal data-tooltip="${esc(p.name)}" data-nav>${esc(p.name)}</a><small class="cell-sub mono" data-tooltip-literal data-tooltip="${esc(p.raw?.base_url||'—')}">${esc(p.raw?.base_url||'—')}</small>${providerNextSync(p)}${groups.length>1?`<a class="provider-account-count" href="${resourceHash('providers',p.id)}?tab=accounts">${esc(providerCredentialLabel(p))}</a>`:''}</td><td class="provider-status-cell" data-label="Status"${span}>${badge(enabled?status:'Disabled')}</td>`}<td class="provider-account-cell" data-label="Accounts">${c?`<a class="provider-account-label" href="${resourceHash('providers',p.id)}?tab=accounts">${esc(c.account||c.name||c.id)}</a>${affected?uiHint(nt('Account needs attention','账户异常'),nt('Affected connections: ','异常连接：')+affected,'warning'):''}`:esc(providerCredentialLabel(p))}</td><td class="provider-quota-cell" data-label="Quota">${providerQuotaSummary(p,group)}</td>${index?'':`<td class="provider-models-cell" data-label="Models"${span}><strong>${providerModels(p).length}</strong></td><td class="provider-traffic-cell" data-label="Success / 15min"${span}>${samples?fmtPct(success/samples*100):'—'}<small class="cell-sub">${t?`${samples} ${nt('requests','次请求')}`:''}</small></td><td class="provider-actions-cell" data-label="Actions"${span}><div class="row-actions">${uiAction('play',`Test ${p.name}`,'test-provider',{id:p.id},testing)}${uiAction('edit',`Edit ${p.name}`,'edit-provider',{id:p.id})}<details class="v3-more-menu"><summary class="btn icon" aria-label="More actions" data-tooltip="More actions">${icon('more')}</summary><div class="v3-more-popover"><button data-action="toggle-provider" data-id="${esc(p.id)}" data-enable="${!enabled}">${enabled?'Disable':'Enable'}</button><button data-action="reset-cooldown" data-provider="${esc(p.id)}">Reset Cooldowns</button><button class="danger" data-action="delete-provider" data-id="${esc(p.id)}">Delete Provider</button></div></details></div>${first?connectionTestResultPanel(p.id,first.id):''}</td>`}</tr>`;
+  }).join('');
 }
 
 function pageProviders() {
-  refreshQuotaOnEntry('providers',(state.providers||[]).filter(providerIsCodex).flatMap(p=>(p.connectionItems||[]).map(c=>({providerId:p.id,connectionId:c.id}))));
+  refreshQuotaOnEntry('providers');
   const sv=scenarioView(), q=state.providerSearch.trim().toLowerCase();
   const matches=(...values)=>!q||values.some(value=>String(value||'').toLowerCase().includes(q));
-  const list=state.providers.filter(p=>matches(p.name,p.type,p.id,p.raw?.base_url,...providerModels(p),...providerUpstreamModels(p)));
-  return `${scenarioBanner()}<div class="v3-page providers-page"><div class="page-head v3-page-head providers-page-head"><div class="head-main"><h1>Providers</h1><p>Each provider is one upstream channel: endpoint, credential, capacity, and models.</p></div><div class="head-actions"><button class="btn" data-action="reset-cooldown">Reset All Cooldowns</button><a class="btn" href="#/settings/import">Import accounts</a><button class="btn primary" data-action="add-provider">${icon('plus')} Add Provider</button></div></div>
-    ${typeof renderObservationTraffic==='function'?renderObservationTraffic(''):''}
-    <div hidden class="notice orange resource-impact-notice"><strong>Routing impact</strong><span>Disabling or deleting a provider immediately changes eligible Logical Model routes. New requests may use fallbacks or fail when no route remains; existing conversations migrate and in-flight requests finish on their current revision.</span></div>
-    <div class="toolbar section v3-list-toolbar"><div class="search-box"><span class="search-icon">${icon('search')}</span><input class="input" data-input="provider-search" value="${esc(state.providerSearch)}" placeholder="Search providers, endpoints or models…"></div></div>
-    <div class="provider-card-list">${list.map(p=>providerListCard(p,demoMode&&p.id==='codex-personal'?sv.provider:p.status)).join('')||'<section class="card empty"><strong>No providers</strong>Add one upstream channel to begin.</section>'}</div></div>`;
+  const list=state.providers.filter(p=>matches(p.name,p.type,p.id,p.raw?.base_url,...providerModels(p),...providerUpstreamModels(p))&&(!state.providerStatus||(state.providerStatus==='disabled'?!providerIsEnabled(p):state.providerStatus==='enabled'?providerIsEnabled(p):['Unavailable','Exhausted','Recovering','Degraded'].includes(p.status)&&providerIsEnabled(p))));
+  const view=state.providerView||'resources';
+  return `${scenarioBanner()}<div class="v3-page providers-page"><div class="page-head v3-page-head"><h1>Providers</h1><div class="head-actions"><a class="btn" href="#/settings/import">${icon('download')} Import accounts</a><button class="btn primary" data-action="add-provider">${icon('plus')} Add Provider</button></div></div><div class="toolbar section"><div class="search-box"><span class="search-icon">${icon('search')}</span><input class="input" data-input="provider-search" value="${esc(state.providerSearch)}" placeholder="Search providers, endpoints or models…"></div><select class="select" data-action="provider-status" aria-label="Provider status">${[["","All statuses"],["enabled","Enabled"],["disabled","Disabled"],["attention","Needs attention"]].map(([value,label])=>`<option value="${value}" ${state.providerStatus===value?'selected':''}>${label}</option>`).join('')}</select><div class="next-segment"><button data-next="provider-view" data-value="resources" aria-pressed="${view==='resources'}">Resources</button><button data-next="provider-view" data-value="diagnostics" aria-pressed="${view==='diagnostics'}">Traffic diagnostics</button></div></div>${view==='diagnostics'?renderObservationTraffic(''):`<section class="card table-scroll provider-comparison"><table><thead><tr><th>Provider</th><th>Status</th><th>Accounts</th><th>${nt('Quota used','额度已用')} ${uiHint('Quota','Independent quota pools are not added or averaged.')}</th><th>Models</th><th>Success / 15min</th><th>Actions</th></tr></thead><tbody>${list.map(p=>providerTableRow(p,demoMode&&p.id==='codex-personal'?sv.provider:p.status)).join('')||'<tr><td colspan="7">No matching providers</td></tr>'}</tbody></table></section>`}</div>`;
 }
 
 function providerListCard(p,status){
@@ -115,10 +231,11 @@ function providerListCard(p,status){
 function providerDataSync(id) { return state.providerCache.get(id) || { provider:state.providers.find(p=>p.id===id), connections:[] }; }
 function providerLastSuccess(provider){const value=provider?.lastSuccessfulAt||provider?.raw?.traffic?.last_success_at;if(!value)return 'Not recorded';const parsed=new Date(value);return Number.isNaN(parsed.getTime())?'Not recorded':parsed.toLocaleString()}
 function pageProvider(id) {
+  const failure=detailFailure('providers',id);if(failure)return failure;
   const data=providerDataSync(id), p=data.provider;
   if(!p){queueMicrotask(()=>loadAndRenderProvider(id));return `<div class="empty"><strong>Loading provider…</strong></div>`;}
   if(!state.providerCache.has(id)) queueMicrotask(()=>loadAndRenderProvider(id));
-  if(providerIsCodex(p))refreshQuotaOnEntry('provider:'+id,(data.connections||[]).map(c=>({providerId:id,connectionId:c.id})));
+  refreshQuotaOnEntry('provider:'+id,providerUsageConnections(p,data.connections||[]).map(c=>({providerId:id,connectionId:c.id})));
   const sv=scenarioView('15m'); const scenarioProvider=demoMode&&id==='codex-personal'; const status=scenarioProvider?sv.provider:p.status; const capacity=scenarioProvider?(state.scenario==='healthy'?92:state.scenario==='protected'?61:0):p.capacity;
   let conns=(data.connections||[]).map(c=>({...c}));
   if(scenarioProvider&&state.scenario==='exhausted') conns=conns.map((c,i)=>({...c,status:i<3?'Cooling':'Unavailable',capacity:0,load:0}));
@@ -127,8 +244,9 @@ function pageProvider(id) {
   const enabled=providerIsEnabled(p), credential=conns[0], upstreamModels=providerUpstreamModels({...p,connectionItems:conns});
   return `${scenarioBanner()}<div class="v3-page v3-provider-page"><div class="v3-breadcrumb"><a href="#/providers" data-nav>Providers</a>${icon('arrow')}<span>${esc(p.name)}</span></div><div class="page-head v3-page-head"><div class="head-main"><div class="head-line"><h1>${esc(p.name)}</h1>${badge(enabled?status:'Disabled')}</div><p>${esc(p.type)} · ${esc(p.raw?.base_url||'No endpoint')}</p></div><div class="head-actions"><button class="btn" data-action="provider-requests" data-id="${esc(id)}">View Requests</button><button class="btn primary" data-action="edit-provider" data-id="${esc(id)}">Edit Provider</button><details class="v3-more-menu"><summary class="btn">More ${icon('down')}</summary><div class="v3-more-popover"><button data-action="reset-cooldown" data-provider="${esc(id)}">Reset Cooldowns</button><button data-action="test-provider" data-id="${esc(id)}">Test Provider</button><button class="${enabled?'toggle-disable':'toggle-enable'}" data-action="toggle-provider" data-id="${esc(id)}" data-enable="${!enabled}">${enabled?'Disable':'Enable'}</button><button class="danger" data-action="delete-provider" data-id="${esc(id)}">Delete</button></div></details></div></div>
     ${nextDetailTabs('providers',id)}
-    ${nextDetailSelected('providers',id,'usage')?nextAnalytics({provider:id})+providerCodexUsageSection(id,p,data,conns):''}
+    ${nextDetailSelected('providers',id,'accounts')?providerRecoveryPanel(p,conns)+providerSubscriptionUsageSection(id,p,data,conns):''}
+    ${nextDetailSelected('providers',id,'usage')?nextAnalytics({provider:id}):''}
     ${nextDetailSelected('providers',id,'health')?`<div class="next-provider-health">${typeof renderObservationTraffic==='function'?renderObservationTraffic(id):''}${providerRecoveryPanel(p,conns)}${credential?connectionTestResultPanel(id,credential.id):''}
-    ${conns.length>1?`<div class="notice orange"><strong>Legacy provider layout</strong><span>This provider contains ${conns.length} internal credentials from an older configuration. They remain compatible, but new providers always use one credential.</span></div>`:''}
+
     <div class="model-summary section"><div class="summary-chip"><strong>${scenarioProvider?sv.providerRecovered:p.recovered??'—'}</strong><small>Recovered / 15min</small></div><div class="summary-chip"><strong>${esc(providerCredentialLabel({...p,connectionItems:conns}))}</strong><small>Credential</small></div><div class="summary-chip"><strong>${providerUpstreamModels({...p,connectionItems:conns}).length}</strong><small>Upstream Models</small></div><div class="summary-chip"><strong>${fmtCapacity(capacity)}</strong><small>Capacity</small></div></div>
-    <section class="card panel section v3-serving-card"><div class="section-head"><div><h2>Serving Status</h2><p>Live capacity and client impact over the last 15 minutes.</p></div></div><div class="notice ${status==='Exhausted'||status==='Unavailable'?'red':status==='Recovering'?'orange':'green'}"><strong>${status==='Healthy'?'Healthy capacity':status==='Recovering'?'Reduced capacity':status==='Exhausted'?'Provider exhausted':'Unavailable'}</strong><span>${status==='Healthy'?'This provider is serving normally.':status==='Recovering'?'This provider has reduced capacity and may retry internally.':status==='Exhausted'?'No usable capacity remains. Logical Model routes may use fallback providers.':'Provider cannot serve requests.'}</span></div><div class="provider-health-meta"><span>Last successful request</span><strong>${esc(providerLastSuccess(p))}</strong></div><div class="divider"></div><div class="inline" style="justify-content:space-between"><span>Recorded client impact</span>${badge(visibleFailures?'Visible Errors':'No failures in window')}</div><div class="divider"></div><div class="grid-equal"><div><strong style="font-size:20px">${scenarioProvider?sv.providerRecovered:p.recovered??'—'}</strong><div class="cell-sub">Recovered requests / 15min</div></div><div><strong style="font-size:20px">${scenarioProvider?sv.providerFailed:p.failed??'—'}</strong><div class="cell-sub">Failed requests / 15min</div></div></div></section></div>`:''}
+    <section class="card panel section v3-serving-card"><div class="section-head"><div><h2>Serving Status</h2></div></div><div class="notice ${status==='Exhausted'||status==='Unavailable'?'red':status==='Recovering'?'orange':'green'}"><strong>${status==='Healthy'?'Healthy capacity':status==='Recovering'?'Reduced capacity':status==='Exhausted'?'Provider exhausted':'Unavailable'}</strong><span>${status==='Healthy'?'This provider is serving normally.':status==='Recovering'?'This provider has reduced capacity and may retry internally.':status==='Exhausted'?'No usable capacity remains. Logical Model routes may use fallback providers.':'Provider cannot serve requests.'}</span></div><div class="provider-health-meta"><span>Last successful request</span><strong>${esc(providerLastSuccess(p))}</strong></div><div class="divider"></div><div class="inline" style="justify-content:space-between"><span>Recorded client impact</span>${badge(visibleFailures?'Visible Errors':'No failures in window')}</div><div class="divider"></div><div class="grid-equal"><div><strong style="font-size:20px">${scenarioProvider?sv.providerRecovered:p.recovered??'—'}</strong><div class="cell-sub">Recovered requests / 15min</div></div><div><strong style="font-size:20px">${scenarioProvider?sv.providerFailed:p.failed??'—'}</strong><div class="cell-sub">Failed requests / 15min</div></div></div></section></div>`:''}

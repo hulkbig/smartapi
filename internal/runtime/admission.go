@@ -63,6 +63,12 @@ func (m *Manager) SetConnectionConcurrency(connectionID string, policy *domain.C
 // release function that must be called when the attempt finishes. A returned
 // failure means the request never took a slot and release must not be called.
 func (m *Manager) Admit(ctx context.Context, id domain.ResourceTargetID) (func(), *domain.Failure) {
+	return m.AdmitObserved(ctx, id, nil)
+}
+
+// AdmitObserved exposes the actual queued interval without changing policy,
+// FIFO order, cancellation, or slot ownership. The callback runs outside mu.
+func (m *Manager) AdmitObserved(ctx context.Context, id domain.ResourceTargetID, queued func(time.Time, time.Time)) (func(), *domain.Failure) {
 	m.mu.Lock()
 	if m.managed && m.targets[id] == nil {
 		m.mu.Unlock()
@@ -106,8 +112,16 @@ func (m *Manager) Admit(ctx context.Context, id domain.ResourceTargetID) (func()
 	wait := connection.adm.policy.EffectiveMaxWait()
 	m.mu.Unlock()
 
+	waitingAt := time.Now()
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
+	if queued != nil {
+		deadline := waitingAt.Add(wait)
+		if clientDeadline, ok := ctx.Deadline(); ok && clientDeadline.Before(deadline) {
+			deadline = clientDeadline
+		}
+		queued(waitingAt, deadline)
+	}
 	select {
 	case <-ticket.ready:
 		if ticket.failure != nil {

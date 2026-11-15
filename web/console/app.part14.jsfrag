@@ -1,6 +1,96 @@
 
 // Exact UI copy only; identifiers, code, secrets and user input are preserved.
 const consoleMessages=Object.fromEntries(`
+Protocol coverage|协议覆盖
+Create Provider|创建渠道
+Custom endpoint|自定义端点
+Editable API endpoint|可配置 API 端点
+Enter your own compatible Base URL|填写兼容接口的基础 URL
+Protocol conversion|协议转换
+See Queue for current global defaults|在队列页查看当前全局默认值
+Supply|供给
+Sessions|会话
+Not supported|不支持
+Edit expiry|修改有效期
+Needs attention|需要处理
+All statuses|全部状态
+No configured protocols|尚未配置协议
+Current supply|当前供给
+Primary|主用
+Fallback|备用
+Supply capabilities|供给能力
+Capability evidence|能力依据
+Saved native declarations. Unverified capability evidence remains unknown.|已保存的原生能力声明；未验证的能力保持未知。
+Declared support|已声明支持
+Not declared|未声明
+No capability evidence|暂无能力依据
+Native protocols|原生协议
+Review restore|审阅恢复
+Current|当前值
+Target|目标值
+Field|字段
+Apply as a new revision|应用为新版本
+Apply changes|应用变更
+No changes|无变更
+No matching revisions|没有匹配的修订
+Actor|操作人
+Resource|资源
+Readback|回读验证
+Size|大小
+Verified|已验证
+snapshot|生成快照
+upload|上传与校验
+retention|清理保留副本
+complete|完成
+running|执行中
+success|成功
+failed|失败
+Verification details|验证详情
+Exact compatibility|精确兼容
+Timeline|时间线
+Records|记录
+Backup scope|备份范围
+Configuration, accounts and keys. Request logs and conversation bodies are excluded by default.|包含配置、账户与密钥；默认不含请求日志和会话内容。
+Include history|包含历史
+May increase each backup by several GB.|可能使每次备份增加数 GB。
+Imports the session without retaining the raw file.|导入会话，不保留原始文件。
+Use the timezone of this schedule.|使用本计划对应的时区。
+Allow models native in other text protocols.|允许使用其他文本协议下的原生模型。
+Generation and editing use their matching Images endpoint.|生成与编辑使用各自匹配的图像端点。
+Use your authorized matching OAuth client.|使用已获授权且匹配的 OAuth 客户端。
+Enable the provider and at least one account to receive requests.|启用渠道及至少一个账户后才接收请求。
+Historical pricing|历史计价
+Exact unit rates are not retained on old attempt records.|旧尝试记录未保留精确单价。
+Usage & Cost|用量与成本
+Upstream policies|上游专属策略
+Counting basis|统计单位
+Callers|调用方
+Reference prices|参考单价
+Current reference prices do not change recorded charges or configured rate cards.|当前参考单价不会改写已记录费用或已配置价卡。
+Automatic model limit|自动模型上限
+Applies to listed aggregators. Set 0 for manual selection; existing models remain unchanged.|适用于指定聚合渠道，0 表示手动选择，已有模型不变。
+Accounts & quota|账户与额度
+Accounts|账户
+Quota|额度
+Resources|资源
+Traffic diagnostics|流量诊断
+Shared quota|共享额度
+Credential quota|凭据额度
+Sharing unconfirmed|共享关系未确认
+No verified shared quota identity.|尚无可验证的共享额度归属。
+Same credential and quota endpoint.|同一凭据与同一额度查询接口。
+Independent quota pools are not added or averaged.|独立额度池分别显示，不相加、不平均。
+No usage data|暂无额度数据
+Quota query not supported|不支持额度查询
+No matching providers|没有匹配的渠道
+Success / 15min|成功率 / 15 分钟
+Details unavailable|详情暂不可用
+Not found|未找到
+Back to list|返回列表
+Query failed|查询失败
+Refresh failed · previous snapshot|刷新失败 · 上次快照
+Session expired. Sign in to continue.|登录已过期，请重新登录。
+Refresh the query before exporting|请先刷新查询再导出
 Import accounts|导入账号
 Next page|下一页
 Non-streaming|非流式
@@ -591,6 +681,23 @@ Edit Codex OAuth Provider|编辑 Codex OAuth 渠道
 Codex Usage|Codex 用量
 Codex usage|Codex 用量
 Subscription usage|订阅用量
+Coding Plan usage|编程套餐用量
+Kimi Coding Plan|Kimi 编程套餐
+Subscription usage for each Coding Plan connection.|各编程套餐连接的订阅用量。
+Subscription limits shown from cache|显示缓存中的订阅额度
+Showing the last cached snapshot.|正在显示上次缓存的快照。
+Unable to query subscription usage.|无法查询订阅用量。
+Not reported|未提供
+Used|已用
+Remaining|剩余
+requests|次请求
+tokens|Token
+credits|积分
+Monthly limit|每月额度
+Subscription limit|订阅额度
+Monthly Coding usage|每月编程用量
+Coding limit|编程额度
+MCP calls limit|MCP 调用额度
 Refresh usage|刷新用量
 Refreshing…|刷新中…
 Weekly limit|每周额度
@@ -1224,6 +1331,10 @@ const consoleBadgeMessages={received:'已接收',waiting:'排队中',active:'执
 // Only known product messages are translated; identifiers and server diagnostics
 // keep their source text. Composite labels are assembled from the same dictionary.
 const consoleMessagePatterns=[
+ [/^(\d+) accounts?$/,n=>n+' 个账户'],
+ [/^(\d+) requests$/,n=>n+' 次请求'],
+ [/^Test (.+)$/,name=>'测试 '+name],
+ [/^Edit (.+)$/,name=>'编辑 '+name],
  [/^(\d+) legacy credentials$/,n=>n+' 组旧版凭据'],
  [/^(.+) subscription usage$/,name=>name+' 订阅用量'],
  [/^(.+) used$/,label=>translatedConsoleText(label)+' 已用'],

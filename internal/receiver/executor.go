@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"ferry/internal/backuppolicy"
 	"ferry/internal/maintenance"
 	"github.com/minio/minio-go/v7"
 )
@@ -31,6 +32,9 @@ var ServiceDir = "/var/lib/ferry"
 // These values are fixed in the administrator-installed binary, never supplied
 // by a release request. Separate instances must not share ports or a project.
 var ProjectName = "ferry"
+
+// ImageRepository is fixed by the administrator at build time, never by payloads.
+var ImageRepository = "ferry"
 var DataAddress = "127.0.0.1:17810"
 var ManagementAddress = "127.0.0.1:17910"
 
@@ -144,7 +148,7 @@ func (e *Environment) BackupNow(ctx context.Context) error {
 	return e.scheduledBackup(ctx, true)
 }
 
-func (e *Environment) scheduledBackup(ctx context.Context, nowRequested bool) error {
+func (e *Environment) scheduledBackup(ctx context.Context, nowRequested bool) (resultErr error) {
 	if err := e.ensureLayout(); err != nil {
 		return err
 	}
@@ -236,12 +240,35 @@ func (e *Environment) scheduledBackup(ctx context.Context, nowRequested bool) er
 	}
 	stamp := now.Format("20060102T150405Z")
 	operationID := "scheduled-" + stamp
+	report := backuppolicy.Run{OperationID: operationID, Status: "running", Phase: "snapshot", StartedAt: now}
+	writeReport := func() {
+		if err := backuppolicy.WriteRun(filepath.Join(e.ServiceDir, "data"), report); err != nil {
+			log.Printf("backup status report unavailable")
+		}
+	}
+	writeReport()
+	defer func() {
+		completed := time.Now().UTC()
+		report.CompletedAt = &completed
+		if resultErr != nil {
+			report.Status = "failed"
+		} else {
+			report.Status = "success"
+			report.Phase = "complete"
+		}
+		writeReport()
+	}()
 	backupDir := filepath.Join(e.ServiceDir, "backups", "scheduled", stamp)
 	var manifest maintenance.Manifest
 	manifest, err = maintenance.BackupConfiguration(filepath.Join(e.ServiceDir, "data"), backupDir)
 	if err != nil {
 		return err
 	}
+	for _, file := range manifest.Files {
+		report.Bytes += file.Size
+	}
+	report.Phase = "upload"
+	writeReport()
 	remote := minioAlias + "/" + minioBucket + "/" + policy.S3Prefix + "/" + operationID
 	if s3Client != nil {
 		remote = "s3://" + policy.S3.Bucket + "/" + policy.S3Prefix + "/" + operationID
@@ -255,6 +282,9 @@ func (e *Environment) scheduledBackup(ctx context.Context, nowRequested bool) er
 	if err = os.WriteFile(filepath.Join(backupDir, "verified.json"), []byte(`{"verified_readback":true}`), 0o600); err != nil {
 		return err
 	}
+	report.VerifiedReadback = true
+	report.Phase = "retention"
+	writeReport()
 	receipt = scheduledReceipt{DestinationID: s3DestinationID(policy), CompletedAt: now, OperationID: operationID, Remote: remote, Objects: append(receipt.Objects, remote)}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
@@ -591,7 +621,7 @@ func (e *Environment) installFiles(request Request) (map[string]any, error) {
 	if err := ExtractReleaseBundle(bundle, releaseDir, state.BundleDigest); err != nil {
 		return nil, err
 	}
-	envBody := []byte("SERVICE_IMAGE=ferry:" + request.ReleaseSHA + "\n")
+	envBody := []byte("SERVICE_IMAGE=" + ImageRepository + ":" + request.ReleaseSHA + "\n")
 	if err := os.WriteFile(filepath.Join(releaseDir, ".env"), envBody, 0o600); err != nil {
 		return nil, fmt.Errorf("write release environment: %w", err)
 	}
@@ -1003,7 +1033,7 @@ func (e *Environment) compose(ctx context.Context, sha string, args ...string) (
 }
 
 func (e *Environment) verifyImage(ctx context.Context, sha string) error {
-	image := "ferry:" + sha
+	image := ImageRepository + ":" + sha
 	out, err := e.run(ctx, nil, dockerPath, "image", "inspect", image,
 		"--format", `{{index .Config.Labels "org.opencontainers.image.revision"}}`)
 	if err != nil {
@@ -1055,7 +1085,7 @@ func verifyDockerArchive(path, sha string) error {
 		if err := decoder.Decode(&manifest); err != nil {
 			return fmt.Errorf("decode Docker image manifest: %w", err)
 		}
-		want := "ferry:" + sha
+		want := ImageRepository + ":" + sha
 		if len(manifest) != 1 || len(manifest[0].RepoTags) != 1 || manifest[0].RepoTags[0] != want {
 			return fmt.Errorf("Docker image archive must contain only %s", want)
 		}

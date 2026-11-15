@@ -36,6 +36,8 @@ type ActiveTrafficRecord struct {
 	ClientIP        string             `json:"client_ip,omitempty"`
 	DurationMS      int64              `json:"duration_ms"`
 	TTFTMS          int64              `json:"ttft_ms"`
+	WaitingSince    *time.Time         `json:"waiting_since,omitempty"`
+	WaitDeadline    *time.Time         `json:"wait_deadline,omitempty"`
 }
 
 // UnfinishedRequests includes the entire client lifetime; ActiveTraffic is
@@ -45,17 +47,37 @@ func (s *Scheduler) UnfinishedRequests() []ActiveTrafficRecord {
 	if s == nil || s.led == nil {
 		return out
 	}
+	active := map[string]ActiveTrafficRecord{}
+	for _, record := range s.ActiveTraffic() {
+		active[record.RequestID] = record
+	}
 	for _, rec := range s.led.LiveRequests() {
+		queued := active[rec.ID]
+		if rec.Status != domain.RequestStatus(TrafficWaiting) || queued.Phase != TrafficWaiting {
+			queued.WaitingSince, queued.WaitDeadline = nil, nil
+		}
 		out = append(out, ActiveTrafficRecord{
 			RequestID: rec.ID, LogicalModelID: rec.LogicalModelID,
 			ProviderID: rec.ProviderID, ConnectionID: rec.ConnectionID, UpstreamModel: rec.UpstreamModel,
 			Phase: ActiveTrafficPhase(rec.Status), RuntimeRevision: rec.RuntimeRevision, StartedAt: rec.Ts,
 			ConsumerKey: rec.ConsumerKey, APIKeySecretID: rec.APIKeySecretID, Protocol: rec.Protocol,
 			Stream: rec.Stream, ClientIP: rec.ClientIP, DurationMS: rec.DurationMS, TTFTMS: rec.TTFTMS,
+			WaitingSince: queued.WaitingSince, WaitDeadline: queued.WaitDeadline,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].RequestID < out[j].RequestID })
 	return out
+}
+
+func (s *Scheduler) observeAdmission(requestID string) func(time.Time, time.Time) {
+	return func(start, deadline time.Time) {
+		s.activeMu.Lock()
+		defer s.activeMu.Unlock()
+		if record, ok := s.active[requestID]; ok && record.Phase == TrafficWaiting {
+			record.WaitingSince, record.WaitDeadline = &start, &deadline
+			s.active[requestID] = record
+		}
+	}
 }
 
 func (s *Scheduler) setActiveTraffic(d *decision, phase ActiveTrafficPhase, target *domain.CompiledTarget) {

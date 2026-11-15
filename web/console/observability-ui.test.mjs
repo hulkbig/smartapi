@@ -7,9 +7,9 @@ import * as observabilityModel from './observability-model.js';
 const documentEvents=new Map(),windowEvents=new Map(),intervals=[];
 let now=Date.now();
 class ObservationDate extends Date{static now(){return now}}
-const context=vm.createContext({
+const context=vm.createContext({uiHint:()=>"<button></button>",
   URLSearchParams,AbortController,ObservationResource,observabilityModel,queueMicrotask,
-  setInterval:fn=>intervals.push(fn),setTimeout,clearTimeout,Date:ObservationDate,
+  setInterval:fn=>intervals.push(fn),setTimeout,clearTimeout,Date:ObservationDate,installTooltips:()=>{},installActionMenus:()=>{},
   location:{hash:'#/sessions/s?from=2026-09-01T00:00:00Z&to=2026-09-02T00:00:00Z&participating_provider=p1'},
   document:{addEventListener:(name,fn)=>documentEvents.set(name,fn),activeElement:null},
   window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},
@@ -48,6 +48,16 @@ assert.equal(first.resource.data.requestId,'older','explicit timeline request mu
 assert.equal(calls[1][2].from,'2026-09-01T00:00:00Z');assert.equal(calls[1][2].window,undefined,'timeline must share server anchored scope');
 assert.equal(calls.filter(c=>c[0]==='request').length,1,'only the selected source may load full Trace');
 assert.ok(calls[2][2].signal instanceof AbortSignal);
+// Successful primary data survives failures in the selected trace and timeline.
+context.adapter.getRequest=async()=>{throw new Error('trace unavailable')};
+await run('loadObservationContext(observationContext("session","s"))');
+assert.equal(first.resource.error,null);assert.equal(first.resource.data.page.session.session_id,'s');
+assert.equal(first.resource.data.requests.length,2);assert.equal(first.resource.data.detailError.message,'trace unavailable');
+context.adapter.getSessionRequests=async()=>{throw new Error('timeline unavailable')};
+await run('loadObservationContext(observationContext("session","s"))');
+assert.equal(first.resource.error,null);assert.equal(first.resource.data.page.session.session_id,'s');
+assert.equal(first.resource.data.timelineError.message,'timeline unavailable');
+
 
 // Model routing reuses recorded request events, with the model pinned even if
 // an incoming link or a retained filter names a different model.
@@ -218,7 +228,7 @@ assert.match(run('modelRoutingChain([{id:"p1",model:"one"},{id:"p2",model:"two"}
 run('activeObservationContext=observationContext("session","s")');
 context.render=()=>{};
 const focused={dataset:{observeField:'q'},selectionStart:3,selectionEnd:8};context.document.activeElement=focused;
-let restored=[];context.app={querySelector:()=>({focus:()=>restored.push('focus'),setSelectionRange:(...range)=>restored.push(range)})};
+let restored=[];context.app={querySelector:selector=>selector==='.observability-page'?null:({focus:()=>restored.push('focus'),setSelectionRange:(...range)=>restored.push(range)})};
 run('renderObservationPreservingFocus()');assert.deepEqual(restored,['focus',[3,8]],'async rendering must preserve search keyboard focus/caret');
 
 const detailSource=await fs.readFile(new URL('./app.part5.jsfrag',import.meta.url),'utf8');
@@ -227,6 +237,8 @@ assert.ok(start>=0&&end>start);
 const pending=[];let route={section:'requests',id:'one'},renders=0;
 context.currentRoute=()=>route;context.render=()=>renders++;context.showToast=()=>{};
 context.adapter={getRequest:(id,{signal})=>new Promise(resolve=>pending.push({id,signal,resolve}))};
+const sharedSource=await fs.readFile(new URL('./app.part4.jsfrag',import.meta.url),'utf8');
+vm.runInContext(sharedSource.slice(sharedSource.indexOf('function detailLoadState('),sharedSource.indexOf('function providerIsEnabled(')),context);
 vm.runInContext(detailSource.slice(start,end),context);
 const one=run('loadAndRenderRequest("one")'),duplicate=run('loadAndRenderRequest("one")');
 await Promise.resolve();assert.equal(pending.length,1,'slow polling must stay single flight');
@@ -236,3 +248,29 @@ pending[1].resolve({id:'two'});await two;
 pending[0].resolve({id:'one',stale:true});await Promise.all([one,duplicate]);
 assert.equal(context.state.requestCache.get('one'),undefined,'late request must not restore old selection');assert.equal(context.state.requestCache.get('two').id,'two');assert.equal(renders,1);
 console.log('Observation navigation, scoped selection, focus and Request polling: PASS');
+
+// Provider polling must leave sibling cards and the existing interactive graph mounted.
+run('activeObservationContext={type:"provider",id:"p"}');
+context.document.activeElement=null;
+let replacedSection=null,preservedGraph=null,synced=0;
+const graph={};
+const nextSection={querySelector:()=>({replaceWith:node=>{preservedGraph=node}})};
+const section={querySelector:()=>graph,replaceWith:node=>{replacedSection=node}};
+context.app={querySelector:()=>section};
+context.document.createElement=()=>({content:{firstElementChild:nextSection}});
+context.renderObservationTraffic=id=>{assert.equal(id,'p');return '<section></section>'};
+context.localizeDOM=node=>assert.equal(node,nextSection);
+context.syncObservabilityView=()=>synced++;
+context.render=()=>assert.fail('Provider polling must not render the whole page');
+run('renderObservationPreservingFocus()');
+assert.equal(replacedSection,nextSection);
+assert.equal(preservedGraph,graph);
+assert.equal(synced,1);
+console.log('Provider polling preserves sibling cards and mounted graph: PASS');
+
+let refreshPaints=0;context.renderObservationPreservingFocus=()=>refreshPaints++;
+const cached=run('activeObservationContext=observationContext("sessions","refresh-count")');
+cached.resource.data={sources:[],sourceId:'',requestId:''};
+await cached.resource.load(async()=>({sources:[],sourceId:'',requestId:''}));
+assert.equal(refreshPaints,1,'a cached refresh paints once, not at loading, success and settled');
+console.log('Cached observation polling paints once per completed refresh: PASS');

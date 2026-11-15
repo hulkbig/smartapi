@@ -17,7 +17,6 @@ import (
 	"ferry/internal/controlstore"
 	"ferry/internal/domain"
 	"ferry/internal/egress"
-	"ferry/internal/ledger"
 	sched "ferry/internal/scheduler"
 )
 
@@ -2505,19 +2504,17 @@ func (s *Server) handleV2APIKeys(w http.ResponseWriter, r *http.Request) {
 		writeMgmtErr(w, http.StatusServiceUnavailable, "usage ledger is not configured")
 		return
 	}
-	usage, err := s.deps.Ledger.ByConsumer(from, to)
+	history, err := s.deps.Ledger.QueryAPIKeyHistory(r.Context(), identities, from, to, false)
 	if err != nil {
 		writeMgmtErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]map[string]any, 0, len(identities))
 	for _, identity := range identities {
-		keyUsage := usage[identity.Name]
-		if keyUsage == nil {
-			keyUsage = &ledger.UsageSummary{}
-		}
+		report := history[identity.ID]
 		items = append(items, map[string]any{
-			"identity": identity, "secrets": secrets[identity.ID], "usage": keyUsage,
+			"identity": identity, "secrets": secrets[identity.ID], "usage": report.Usage,
+			"history": report.History, "last_request_at": report.History.LastRequestAt,
 		})
 	}
 	writeMgmtJSON(w, http.StatusOK, map[string]any{"api_keys": items, "from": from, "to": to})
@@ -2586,18 +2583,13 @@ func (s *Server) handleV2APIKeyDetail(w http.ResponseWriter, r *http.Request) {
 		writeMgmtErr(w, http.StatusServiceUnavailable, "usage ledger is not configured")
 		return
 	}
-	byConsumer, usageErr := s.deps.Ledger.ByConsumer(from, to)
+	history, usageErr := s.deps.Ledger.QueryAPIKeyHistory(r.Context(), []domain.APIKeyIdentity{*identity}, from, to, true)
 	if usageErr != nil {
 		writeMgmtErr(w, http.StatusInternalServerError, usageErr.Error())
 		return
 	}
-	keyUsage := byConsumer[identity.Name]
-	if keyUsage == nil {
-		keyUsage = &ledger.UsageSummary{}
-	}
-	recent, _, recentErr := s.deps.Ledger.QueryRequests(domain.LogFilter{
-		From: from, To: to, ConsumerKey: identity.Name, Limit: 10,
-	})
+	report := history[identity.ID]
+	recent, recentErr := s.deps.Ledger.QueryAPIKeyRequests(r.Context(), *identity, from, to, 10)
 	if recentErr != nil {
 		writeMgmtErr(w, http.StatusInternalServerError, recentErr.Error())
 		return
@@ -2606,14 +2598,9 @@ func (s *Server) handleV2APIKeyDetail(w http.ResponseWriter, r *http.Request) {
 	for i := range recent {
 		recentViews = append(recentViews, v2RequestSummary(&recent[i], ""))
 	}
-	var lastRequestAt *time.Time
-	if len(recent) > 0 {
-		observed := recent[0].Ts
-		lastRequestAt = &observed
-	}
 	writeMgmtJSON(w, http.StatusOK, map[string]any{
-		"identity": identity, "secrets": secrets, "usage": keyUsage,
-		"recent_requests": recentViews, "last_request_at": lastRequestAt, "from": from, "to": to,
+		"identity": identity, "secrets": secrets, "usage": report.Usage, "history": report.History,
+		"recent_requests": recentViews, "last_request_at": report.History.LastRequestAt, "from": from, "to": to,
 	})
 }
 

@@ -1,4 +1,4 @@
-import { cloneInitialData } from './mock-data.js?visual=v3-provider-relogin';
+import { cloneInitialData } from './mock-data.js?visual=smartapi-key-history-20261113b';
 import { observationQuery } from './observability-model.js';
 import { createObservationFixtures } from './observability-fixtures.js';
 
@@ -168,6 +168,26 @@ export class SmartAPIAdapter {
   async getConnectionOAuthStatus(_providerId, _connectionId) { throw new Error('Not implemented'); }
   async importConnectionOAuth(_providerId, _connectionId, _authFile) { throw new Error('Not implemented'); }
   async getConnectionOAuthUsage(_providerId, _connectionId, _options) { throw new Error('Not implemented'); }
+  async getConnectionUsage(providerId, connectionId, options = {}) { return this.getConnectionOAuthUsage(providerId, connectionId, options); }
+  codingUsageKind(provider, connection) {
+    const type = String(provider?.raw?.type ?? provider?.type ?? '').trim().toLowerCase();
+    if (type && type !== 'custom') return '';
+    const baseUrl = String(connection?.raw?.base_url ?? connection?.baseUrl ?? '').trim() ||
+      (provider?.raw?.base_url ?? provider?.baseUrl ?? provider?.base_url);
+    const endpoint = String(connection?.raw?.full_url || connection?.fullUrl || baseUrl || '').trim();
+    // Match official inference endpoints without normalizing alternate hosts or paths.
+    // The server authorizes the credential and selects the upstream usage URL.
+    const match = /^https:\/\/([a-z.]+)(?::443)?(\/[^\s\\%?#]*)$/i.exec(endpoint);
+    if (!match) return '';
+    const host = match[1].toLowerCase(), path = match[2];
+    if (/\/\.{1,2}(?:\/|$)/.test(path)) return '';
+    if ((host === 'api.kimi.com' || host === 'api.kimi.ai') && /^\/coding(?:\/|$)/.test(path)) return 'kimi-coding';
+    if (/^\/api\/(?:coding|anthropic|v1)(?:\/|$)/.test(path)) {
+      if (host === 'open.bigmodel.cn') return 'glm-coding';
+      if (host === 'api.z.ai') return 'zai-coding';
+    }
+    return '';
+  }
   async getUsageResetRequests() { return []; }
   async prepareUsageReset(_providerId, _connectionId, _creditId, _accountId) { throw new Error('Not implemented'); }
   async confirmUsageReset(_request) { throw new Error('Not implemented'); }
@@ -627,12 +647,12 @@ export class MockSmartAPIAdapter extends SmartAPIAdapter {
     return clone(this.settings);
   }
   async updateSettings(patch) { await sleep(); const {pricing_sync,expected_revision,...rest}=clone(patch);if(rest.concurrency){if(expected_revision!==this.revision)throw Object.assign(new Error("Reload settings before saving concurrency"),{status:409});this.revision++;}if(rest.backup){const b=rest.backup;if(b.s3_credentials){b.s3={...b.s3,credentials_ref:'backup:s3:00000000-0000-0000-0000-000000000000'};delete b.s3_credentials;}else if(b.s3?.endpoint&&b.s3.endpoint===this.settings.backup?.s3?.endpoint){b.s3.credentials_ref=this.settings.backup.s3.credentials_ref;}}Object.assign(this.settings,rest);if(pricing_sync)this.settings.pricing_sync={...await this.getPricingStatus(),settings:pricing_sync};return clone(this.settings); }
-  async getApiKeys() { await sleep(); return clone(this.data.apiKeys.map(item => ({ ...item, revealable:this.apiKeySecrets.has(item.id) }))); }
-  async getApiKey(id) {
+  async getApiKeys(window = "168h") { return Promise.all(this.data.apiKeys.map(item => this.getApiKey(item.id, window))); }
+  async getApiKey(id, window = "168h") {
     await sleep();
     const item = this.data.apiKeys.find(x => x.id === id);
     if (!item) throw new Error(`Unknown API key ${id}`);
-    const requests = this.data.requests.filter(x => x.apiKey === item.name);
+    const requests = this.data.requests.filter(x => x.apiKey === item.name && !['waiting','streaming','running'].includes(x.status));
     const failed = requests.filter(x => x.failed).length;
     const tokenCount = requests.reduce((total, request) => {
       const match = String(request.tokens || '').trim().match(/^([\d.]+)\s*([KMG])?$/i);
@@ -640,8 +660,14 @@ export class MockSmartAPIAdapter extends SmartAPIAdapter {
       const scale = {K:1e3,M:1e6,G:1e9}[String(match[2] || '').toUpperCase()] || 1;
       return total + Number(match[1]) * scale;
     }, 0);
+    const hours = {"24h":24,"168h":168,"720h":720}[window] || 168, to = new Date(), from = new Date(+to-hours*3600000), count = hours===24?24:hours/24;
+    const canceled = requests.filter(x=>x.canceled).length;
+    const timeline = Array.from({length:count},(_,i)=>({from:new Date(+from+i*hours/count*3600000).toISOString(),to:new Date(+from+(i+1)*hours/count*3600000).toISOString(),requests:i===count-1?requests.length:0,succeeded:i===count-1?requests.length-failed-canceled:0,failed:i===count-1?failed:0,input_tokens:i===count-1?tokenCount:0,output_tokens:0,tokens_observed:true}));
+    const models = [...new Set(requests.map(r=>r.model))].map(id=>({id,requests:requests.filter(r=>r.model===id).length}));
     return clone({
       ...item,
+      history:{from:from.toISOString(),to:to.toISOString(),timeline,models,coverage:{basis:'retained_request_details',scope:'global',rollup_only_requests:0,mismatched_hours:0}},
+      lastRequestAt:requests.length?to.toISOString():null,
       identity:{
         id:item.id, name:item.name, description:item.description || '', enabled:item.status === 'Active',
         revoked_at:item.status === 'Revoked' ? new Date().toISOString() : null,
@@ -651,7 +677,7 @@ export class MockSmartAPIAdapter extends SmartAPIAdapter {
 		exact_only:Boolean(item.exactOnly),
       },
       secrets:[{id:`${item.id}-active`,preview:item.preview,state:item.status === 'Revoked' ? 'RETIRED' : 'ACTIVE',revealable:this.apiKeySecrets.has(item.id),created_at:new Date(item.created).toISOString(),last_used_at:requests.length?new Date().toISOString():null}],
-      usageSummary:{requests:requests.length,failed,input_tokens:tokenCount,output_tokens:0,total_cost:0,tokens_observed:requests.length>0,cost_observed:false},
+      usageSummary:{requests:requests.length,failed,canceled,succeeded:requests.length-failed-canceled,input_tokens:tokenCount,output_tokens:0,total_cost:0,tokens_observed:requests.length>0,cost_observed:false},
       recentRequests:requests.map(x=>({id:x.id,logical_model_id:x.model,outcome:x.failed||x.canceled?'FAILED':x.recovered?'RECOVERED_SUCCESS':'DIRECT_SUCCESS',status:x.canceled?'canceled':x.failed?'failed':'success'})),
       revealable:this.apiKeySecrets.has(item.id),
     });
@@ -759,6 +785,34 @@ export class MockSmartAPIAdapter extends SmartAPIAdapter {
     if(!item)throw new Error(`Unknown connection ${connectionId}`);
     const now=Math.floor(Date.now()/1000);
     return {account_id:'demo-'+connectionId,plan_type:'pro',rate_limit:{allowed:true,limit_reached:false,primary_window:{used_percent:93,limit_window_seconds:18000,reset_after_seconds:2700,reset_at:now+2700},secondary_window:{used_percent:12,limit_window_seconds:604800,reset_after_seconds:172800,reset_at:now+172800}},credits:{has_credits:true,unlimited:false,balance:'42.5'},additional_rate_limits:[{limit_name:'GPT-5.3-Codex-Spark',metered_feature:'spark',rate_limit:{allowed:true,limit_reached:false,primary_window:{used_percent:8,limit_window_seconds:18000,reset_after_seconds:2700,reset_at:now+2700}}}],rate_limit_reset_credits:{available_count:3-(this.demoUsageResetRequests||[]).filter(r=>r.account_id==='demo-'+connectionId&&r.status==='reset').length,total_earned_count:3,credits:[0,1,2].map(i=>({id:'demo-credit-'+connectionId+'-'+i,reset_type:'codex_rate_limits',status:(this.demoUsageResetRequests||[]).some(r=>r.credit.id==='demo-credit-'+connectionId+'-'+i&&r.status==='reset')?'redeemed':'available',granted_at:new Date((now-86400)*1000).toISOString(),expires_at:i===2?null:new Date((now+(i+1)*86400)*1000).toISOString(),title:'Full reset (Weekly + 5 hr)',description:'Demo data'}))},observed_at:new Date().toISOString()};
+  }
+  async getConnectionUsage(providerId, connectionId, options = {}) {
+    const provider = this.data.providers.find(item => item.id === providerId);
+    const connection = (this.data.connections[providerId] || []).find(item => item.id === connectionId);
+    if (!provider || !connection) throw new Error('Provider connection not found.');
+    if (provider.raw?.type != null ? provider.raw.type === 'cliproxy-codex' : provider.type === 'cliproxy-codex' || provider.logo === 'codex') {
+      return this.getConnectionOAuthUsage(providerId, connectionId, options);
+    }
+    const kind = this.codingUsageKind(provider, connection);
+    if (!kind) return null;
+    this.demoCodingUsage ||= new WeakMap();
+    if (options.refresh !== false) {
+      const now = Math.floor(Date.now()/1000);
+      this.demoCodingUsage.set(connection, {
+        provider:kind, plan_name:{'kimi-coding':'Kimi Coding Plan','glm-coding':'GLM Coding Plan','zai-coding':'Z.ai Coding Plan'}[kind],
+        windows:kind === 'kimi-coding' ? [
+          {id:'limit_5h',label:'5-hour limit',used_percent:28,unit:'percent',limit_window_seconds:18000,reset_at:now+3600},
+          {id:'limit_7d',label:'Weekly limit',used_percent:0,unit:'percent',limit_window_seconds:604800,reset_at:now+172800},
+          {id:'limit_month_total',label:'Monthly limit',used_percent:32,unit:'percent',breakdown:[{id:'coding',label:'Monthly Coding usage',used_percent:8}]},
+        ] : [
+          {id:'coding',label:'5-hour limit',used_percent:28,unit:'percent',limit_window_seconds:18000,reset_at:now+3600},
+          {id:'credits',label:'Coding limit',used:240,remaining:760,limit:1000,unit:'credits'},
+          {id:'mcp',label:'MCP calls limit',used:10,remaining:90,limit:100,unit:'requests'},
+        ], observed_at:new Date().toISOString(),
+      });
+    }
+    const snapshot = this.demoCodingUsage.get(connection);
+    return snapshot?.provider === kind ? clone(snapshot) : null;
   }
   async getUsageResetRequests() { return clone(this.demoUsageResetRequests||[]); }
   async prepareUsageReset(providerId,connectionId,creditId,accountId) {
@@ -1017,6 +1071,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
       try { body = JSON.parse(text); } catch { body = text; }
     }
     if (!response.ok) {
+      if(response.status===401&&!/^\/api\/auth\/(?:login|initialize|status)(?:[?]|$)/.test(path))this.onUnauthorized?.();
       const detail = body?.error;
       const structured = detail && typeof detail === 'object' ? detail : {};
       const message = structured.message || (typeof detail === 'string' ? detail : '') ||
@@ -1097,8 +1152,10 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
   loadProvidersRaw(force = false) {
     if (force) this.rawProvidersPromise = null;
     if (!this.rawProvidersPromise) {
-      this.rawProvidersPromise = this.request('/api/providers?window=15m')
-        .catch(error => { this.rawProvidersPromise = null; throw error; });
+      const pending=this.request('/api/providers?window=15m').finally(()=>{
+        if(this.rawProvidersPromise===pending)this.rawProvidersPromise=null;
+      });
+      this.rawProvidersPromise=pending;
     }
     return this.rawProvidersPromise;
   }
@@ -1107,7 +1164,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     return new Map((body?.providers || []).map(provider => [provider.id, provider.name || provider.id]));
   }
 
-  mapRoute(step, index, providerNames) {
+  mapRoute(step, index, providerNames, windowMinutes = 15) {
     return {
       id:step.provider_id,
       provider:providerNames.get(step.provider_id) || step.provider_id,
@@ -1118,6 +1175,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
       recoverOn:[...(step.recover_on || [])],
       eligibleConnections:Number(step.eligible_connections || 0),
       totalConnections:Number(step.total_connections || 0),
+      tokensPerSecond:step.output_tokens_per_second??null, speedSamples:Number(step.speed_samples||0), speedWindowMinutes:windowMinutes,
     };
   }
 
@@ -1125,7 +1183,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     const traffic = raw.traffic || {};
     const requests = Number(traffic.requests || 0);
     const successful = Number(traffic.direct_traffic || 0) + Number(traffic.recovery_traffic || 0);
-    const routes = (raw.default_route || []).map((step, index) => this.mapRoute(step, index, providerNames));
+    const routes = (raw.default_route || []).map((step, index) => this.mapRoute(step, index, providerNames, windowMinutes));
     return {
       id:raw.id,
       name:raw.display_name || raw.id,
@@ -1135,6 +1193,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
       requestRate:Math.round(requests / Math.max(1, windowMinutes) * 100) / 100,
       clientSuccess:percentage(successful, requests),
       firstToken:duration(traffic.avg_ttft_ms),
+      tokensPerSecond:traffic.output_tokens_per_second??null, speedSamples:Number(traffic.speed_samples||0), speedWindowMinutes:windowMinutes,
       completion:duration(traffic.avg_duration_ms),
       direct:Number(traffic.direct_traffic || 0),
       recovered:Number(traffic.recovery_traffic || 0),
@@ -1147,8 +1206,8 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     };
   }
 
-  async getAnalytics({window='24h',to='',model='',provider=''}={}) {
-    return this.request('/api/analytics?'+new URLSearchParams({window,...(to?{to}:{}),model,provider}));
+  async getAnalytics({window='24h',to='',model='',provider='',caller_id=''}={}) {
+    return this.request('/api/analytics?'+new URLSearchParams({window,...(to?{to}:{}),model,provider,...(caller_id?{caller_id}:{})}));
   }
 
   async getOverview(window = '15m') {
@@ -1304,7 +1363,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     const retrySeconds = retryAt ? Math.max(0, Math.ceil((Date.parse(retryAt) - Date.now()) / 1000)) : 0;
     const oauth = String(raw.credential_ref || '').startsWith('oauth:codex:');
     return {
-      id:raw.id, name:raw.identity || raw.id, type:oauth ? 'OAuth' : 'API Key / Token',
+      id:raw.id, quotaGroupId:raw.quota_group_id||'', quotaScope:raw.quota_scope||'', name:raw.identity || raw.id, type:oauth ? 'OAuth' : 'API Key / Token',
       enabled:Boolean(raw.enabled),
       account:raw.identity || (oauth ? raw.credential_ref.slice('oauth:codex:'.length) : raw.credential_ref || '—'),
       region:'—', status:connectionRole(raw), load:null, capacity:remainingCapacity(raw),
@@ -1704,6 +1763,13 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     return body.usage;
   }
 
+  async getConnectionUsage(providerId, connectionId, options = {}) {
+    let query = options.refresh === false ? '?refresh=false' : '';
+    if(options.quotaGroupId)query+=(query?'&':'?')+'quota_group_id='+encodeURIComponent(options.quotaGroupId);
+    const body = await this.request(`/api/providers/${encodeURIComponent(providerId)}/connections/${encodeURIComponent(connectionId)}/usage${query}`);
+    return body.usage;
+  }
+
   async getUsageResetRequests() {
     return (await this.request('/api/oauth/usage-reset-requests')).requests || [];
   }
@@ -1766,7 +1832,7 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
   async getRequests(filters = {}) {
     const body = await this.request(`/api/requests?${this.requestQuery(filters)}`);
     const items=(body.requests || []).map(request => this.mapRequest(request));
-    items.total=Number(body.total||0); items.offset=Number(filters.offset||0); items.limit=Number(filters.limit||100); return items;
+    items.total=Number(body.total||0); items.scope=body.scope; items.offset=Number(filters.offset||0); items.limit=Number(filters.limit||100); return items;
   }
 
   traceTitle(event) {
@@ -1914,22 +1980,22 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
     const active = (item.secrets || []).find(secret => secret.state === 'ACTIVE') || (item.secrets || [])[0];
     return {
       id:identity.id, name:identity.name, preview:active?.preview || '—',
-      status:identity.revoked_at ? 'Revoked' : identity.enabled ? 'Active' : 'Disabled',
+      status:identity.revoked_at ? 'Revoked' : identity.expires_at&&Date.parse(identity.expires_at)<=Date.now() ? 'Expired' : identity.enabled ? 'Active' : 'Disabled',
       scope:(identity.scope_models||[]).length ? (identity.scope_models||[]).join(', ') : 'All models',
       usage:item.usage ? Math.round(Number(item.usage.requests || 0) / Math.max(1, windowMinutes) * 100) / 100 : '—',
       created:dateLabel(identity.created_at), createdAt:identity.created_at, description:identity.description || '', secrets:item.secrets || [], identity, usageSummary:item.usage||null,
-      recentRequests:item.recent_requests || [], lastRequestAt:item.last_request_at || null,
+      recentRequests:item.recent_requests || [], lastRequestAt:item.last_request_at || item.history?.last_request_at || null, history:item.history || null,
       revealable:Boolean(active?.revealable),
     };
   }
 
-  async getApiKeys() {
-    const body = await this.request('/api/api-keys?window=15m');
+  async getApiKeys(window = '168h') {
+    const body = await this.request(`/api/api-keys?window=${encodeURIComponent(window)}`);
     const minutes=(Date.parse(body.to)-Date.parse(body.from))/60000;
     return (body.api_keys || []).map(item => this.mapApiKey(item, Number.isFinite(minutes)&&minutes>0?minutes:15));
   }
 
-  async getApiKey(id) { const body=await this.request(`/api/api-keys/${encodeURIComponent(id)}?window=720h`); return this.mapApiKey(body, 43200); }
+  async getApiKey(id, window = '168h') { const body=await this.request(`/api/api-keys/${encodeURIComponent(id)}?window=${encodeURIComponent(window)}`); return this.mapApiKey(body, (Date.parse(body.to)-Date.parse(body.from))/60000 || 10080); }
 
   async createApiKey(input) {
     const body = await this.request('/api/api-keys', {
@@ -1971,13 +2037,23 @@ export class HttpSmartAPIAdapter extends SmartAPIAdapter {
   async getRevisions() {
     const body = await this.request('/api/revisions');
     return (body.revisions || []).map(item => ({
-      id:item.revision, time:new Date(item.created_at).toLocaleString('en-US'), actor:item.actor||'system', scope:(item.resources||[]).join(', ')||'Runtime',
+      id:item.revision, createdAt:item.created_at, time:new Date(item.created_at).toLocaleString('en-US'), actor:item.actor||'system', scope:(item.resources||[]).join(', ')||'Runtime',
       summary:item.summary||(item.restored_from_revision ? `Restored from revision #${item.restored_from_revision}` : 'Runtime configuration applied'), source:item.source,
       status:item.active ? 'Applied' : 'Superseded',
     }));
   }
 
   async getRevision(id) { return this.request(`/api/revisions/${encodeURIComponent(id)}`); }
+  async prepareRevisionRestore(id) {
+    const draft=await this.request(`/api/revisions/${encodeURIComponent(id)}/restore-draft`,{method:'POST',body:'{}'});
+    const validation=await this.request(`/api/drafts/${encodeURIComponent(draft.id)}/validate`,{method:'POST',body:'{}'});
+    if(!validation.valid)throw new SmartAPIError('Restore draft validation failed.',422,{details:validation.errors||[]});
+    const current=await this.getRevision(draft.base_revision);
+    return {draftId:draft.id,baseRevision:draft.base_revision,targetRevision:id,before:current.intent,after:draft.intent,warnings:validation.warnings||[]};
+  }
+  async applyRevisionRestore(review) {
+    return this.request(`/api/drafts/${encodeURIComponent(review.draftId)}/apply`,{method:'POST',body:JSON.stringify({expected_revision:review.baseRevision})});
+  }
   async restoreRevision(id) {
     const draft=await this.request(`/api/revisions/${encodeURIComponent(id)}/restore-draft`, {method:'POST',body:'{}'});
     const validation=await this.request(`/api/drafts/${encodeURIComponent(draft.id)}/validate`, {method:'POST',body:'{}'});

@@ -48,6 +48,32 @@ assert.equal(observationQuery({scope:'all',window:'24h'}),'scope=all');
 const focused=focusedSource({source_id:'session:s',request_count:7,selected_request_status:'waiting'}, {...detail,client_request:{...detail.client_request,content_preview:{preview_role:'response',preview_text:'visible',content_state:'recorded'}}});
 assert.equal(focused.selected_request_id,'r');assert.equal(focused.selected_request_status,'success');assert.equal(focused.request_count,7);assert.equal(focused.content_preview.preview_text,'visible');
 
+const mixed={...detail,route_snapshot:{...detail.route_snapshot,route_steps:[
+  {...detail.route_snapshot.route_steps[0],upstream_model:'gpt-6.1-sol'},
+  ...detail.route_snapshot.route_steps.slice(1),
+],inactive_route_steps:[
+  {route_step:2,provider_id:'openai',provider_name:'OpenAI',upstream_model:'gpt-6.1-sol',override_name:'Codex only'},
+  {route_step:1,provider_id:'p1',provider_name:'Historical One',upstream_model:'gpt-6.1',override_name:'Codex only'},
+  {route_step:4,provider_id:'p1',upstream_model:'gpt-6.1-sol'}, // Already effective, even with a different position.
+  {route_step:5,provider_id:'openai',upstream_model:'gpt-6.1-sol'},
+]}};
+vm=buildRouteViewModel(mixed);
+assert.deepEqual(vm.providers.map(p=>[p.provider_id,p.upstream_model,Boolean(p.inactive)]),[
+  ['p1','gpt-6.1-sol',false],['p2',undefined,false],['p3',undefined,false],
+  ['openai','gpt-6.1-sol',true],['p1','gpt-6.1',true],
+],'deduplicate by provider and model, keeping a different model from the same provider as a separate node');
+assert.equal(vm.providers[3].override_name,'Codex only');
+assert.equal(vm.candidateCount,3,'inactive steps supply no candidate evidence');
+for(const seq of [1,4,5,6,8,Infinity]){
+  const route=buildRouteViewModel(mixed,seq);
+  assert.ok(route.providers.filter(p=>p.inactive).every(p=>!p.candidates.length&&!p.selected&&!p.active&&!p.attempted&&!p.failed),`inactive steps must stay outside playback at ${seq}`);
+}
+assert.deepEqual(buildRouteViewModel(mixed,4).providers[0].candidates.filter(c=>c.active).map(c=>c.connection_id),['c1']);
+assert.deepEqual(buildRouteViewModel(mixed,6).providers[0].candidates.filter(c=>c.selected&&!c.active).map(c=>c.connection_id),['c2'],'rebind selects the next connection before dispatch');
+assert.deepEqual(buildRouteViewModel(mixed,8).providers[0].candidates.filter(c=>c.active).map(c=>c.connection_id),['c2']);
+assert.deepEqual(vm.providers.filter(p=>p.selected).map(p=>p.upstream_model),['gpt-6.1-sol']);
+assert.deepEqual(vm.providers[0].candidates.filter(c=>c.selected&&!c.active&&!c.failed).map(c=>c.connection_id),['c2'],'completed recovery keeps the successful connection selected');
+
 // Current terminal state cannot keep a stale call animating. An explicit
 // replay still shows the recorded call at that point, even at the final seq.
 const incomplete={...detail,execution_trace_events:events.slice(0,4)};
@@ -83,7 +109,7 @@ assert.equal(replayDelay([{at:'2026-11-05T00:00:00Z'},{at:'2026-11-05T01:00:00Z'
 const calls=[];
 const api=new HttpSmartAPIAdapter('',async(path,options={})=>{
   calls.push({path,options});
-  if(path.startsWith('/api/requests/r'))return Response.json({...detail,client_request:{...detail.client_request,usage:{input_tokens:0,output_tokens:0},usage_state:'known',cost_state:'known',total_cost:0}});
+  if(path.startsWith('/api/requests/r'))return Response.json({...mixed,client_request:{...mixed.client_request,usage:{input_tokens:0,output_tokens:0},usage_state:'known',cost_state:'known',total_cost:0}});
   return Response.json({total:0,sessions:[],sources:[],requests:[]});
 });
 const controller=new AbortController();
@@ -94,6 +120,7 @@ await api.getProviderTraffic('provider/with space',{mode:'request'});
 assert.match(calls[1].path,/providers\/provider%2Fwith%20space\/traffic/);
 const mapped=await api.getRequest('r');
 assert.equal(mapped.sessionId,'s');assert.equal(mapped.routeSnapshot.candidates.length,3);assert.equal(mapped.executionEvents.length,10);
+assert.equal(buildRouteViewModel(mapped).providers.find(p=>p.inactive)?.provider_name,'OpenAI','request detail carries recorded inactive steps through the adapter');
 assert.equal(mapped.usageObserved,true,'explicit zero usage must remain observed');
 const broken=new HttpSmartAPIAdapter('',async()=>Response.json({error:{message:'History offline'}},{status:503}));
 await assert.rejects(()=>broken.getSessions(),error=>error instanceof SmartAPIError&&error.status===503,'real errors must not fall back to Mock data');

@@ -44,7 +44,7 @@ const state={
  requests:[],requestTotal:0,requestLimit:25,requestOffset:0,requestWindow:'24h',requestFilter:'all',requestSearch:'',requestLastUpdated:new Date(now),
 };
 const context=vm.createContext({
- state,console,Date,Intl,Math,Number,URL,URLSearchParams,location:{href:"https://ferry.test/#/settings/security"},consoleLocale:'en-US',NodeFilter:{SHOW_TEXT:4},
+ state,console,Date,Intl,detailFailure:()=>'',Math,Number,URL,URLSearchParams,location:{href:"https://ferry.test/#/settings/security"},consoleLocale:'en-US',NodeFilter:{SHOW_TEXT:4},
  document:{querySelector:()=>null,createTreeWalker(root){const nodes=textNodes(root);let index=0;return {currentNode:null,nextNode(){this.currentNode=nodes[index++];return Boolean(this.currentNode);}};}},
  nt:(en,zh)=>context.consoleLocale==='zh-CN'?zh:en,nextLocale:()=>context.consoleLocale==='zh-CN'?'zh':'en',esc,icon:()=>'',badge:status=>'<span class="badge"><span class="status-dot"></span>'+esc(status)+'</span>',
  demoMode:false,scenarioView:()=>({}),scenarioBanner:()=>'',queueMicrotask(){},setInterval(){},
@@ -52,6 +52,7 @@ const context=vm.createContext({
 });
 const run=source=>vm.runInContext(source,context);
 const read=part=>fs.readFile(new URL('./app.part'+part+'.jsfrag',import.meta.url),'utf8');
+const controls=await read(1);run(controls.slice(controls.indexOf('function uiHint('),controls.indexOf('const resourceHash')));
 async function loadFunctions(part,names){
  const source=await read(part);
  for(const name of names){
@@ -61,10 +62,10 @@ async function loadFunctions(part,names){
  }
 }
 run(await read(14));
-await loadFunctions(3,['modelIsEnabled','modelLifecycle','pageModels']);
-await loadFunctions(6,['pageSettings','settingsGeneral','settingsAutomaticUsageReset','settingsCodexUsageProtection','settingsPricingSync','settingsCodexVersion']);
+await loadFunctions(3,['modelIsEnabled','modelLifecycle','modelSpeedMetric','modelSupplySummary','pageModels']);
+await loadFunctions(6,['pageSettings','settingsUpstream','settingsGeneral','settingsAutomaticUsageReset','settingsCodexUsageProtection','settingsPricingSync','settingsCodexVersion']);
 await loadFunctions(7,['managementTokenStatus','ferrySkillInstallPrompt','ferrySkillInstallCard','settingsSecurity']);
-await loadFunctions(11,['requestFilterSummary','requestKeySubtitle','requestMoney','requestPricingLabel','requestReferenceDetails','requestCostDetails','requestTimingTone','requestAccountingCells','pageRequests','pageApiKeys','apiKeySecretActivity','apiKeyDetailModal']);
+await loadFunctions(11,['requestFilterSummary','requestKeySubtitle','requestMoney','requestPricingLabel','requestReferenceDetails','requestCostDetails','requestTimingTone','requestAccountingCells','pageRequests','keyWindowLabel','keyNumber','keyTokenTotal','keyLastUsed','keyLastUsedLabel','keyCoverageHint','keySuccess','keyUsageHint','keyTokenHint','keyTrend','sortedApiKeys','apiKeyHistoryDetail','pageApiKeys','apiKeySecretActivity','apiKeyDetailModal']);
 const queueSource=await read(12);run(queueSource.slice(queueSource.indexOf('// Queue controls')));
 
 function localized(expression,locale='zh-CN'){
@@ -88,7 +89,11 @@ state.models=[
  {id:'custom-prefix',name:'Custom prefix',description:'Automatically created for upstream model User. Queue · Cache',status:'Healthy',raw:{auto_generated:false},routes:[],requestRate:0},
 ];
 let root=roundTrip('pageModels()');
-contains(root,'运行状态：不可用','运行状态：降级','为上游模型自动创建：'+modelID,'Search. Queue · Cache',state.models[2].description);
+contains(root,'不可用','降级');
+const hints=root.querySelectorAll('[data-tooltip-literal]').map(el=>el.getAttribute('data-tooltip'));
+assert.ok(hints.includes('为上游模型自动创建：'+modelID));
+assert.ok(hints.includes('Search. Queue · Cache'));assert.ok(hints.includes(state.models[2].description));
+assert.ok(!root.textContent.includes(state.models[1].description),'model descriptions belong in hints, not repeated table rows');
 assert.ok(root.querySelectorAll('[data-id]').some(el=>el.getAttribute('data-id')===modelID));
 
 // Queue wire enums only translate in badges and policy cells, never identifiers.
@@ -113,10 +118,10 @@ state.requestExporting=true;state.requestLoading=true;contains(localized('pageRe
 // Keys: literal scopes, status badges, usage units, and data-label attributes.
 const key={id:'key-1',name:'Key. Queue · Cache',preview:'sk-Cache…1234',status:'Active',scope:'All models',usage:12,created:'2026-09-28',revealable:true,identity:{},secrets:[{id:'secret-1',preview:'sk-Queue…5678',state:'ACTIVE',created_at:now},{id:'secret-2',preview:'sk-Cache…9012',state:'GRACE',created_at:now}],lastRequestAt:now};
 state.apiKeys=[key,{...key,id:'key-2',name:'Revoked key',status:'Revoked',usage:'—'}];
-root=roundTrip('pageApiKeys()');contains(root,key.name,key.preview,'全部模型','已撤销','12 次/分钟','暂不可用');
-for(const label of ['名称','密钥','状态','权限','用量','创建时间','操作'])assert.ok(root.querySelectorAll('[data-label]').some(el=>el.getAttribute('data-label')===label),'responsive label '+label);
+root=roundTrip('pageApiKeys()');contains(root,key.name,key.preview,'全部模型','已撤销','暂不可用');
+for(const label of ['名称','状态','权限','请求数','Token','成功率','最近使用','操作'])assert.ok(root.querySelectorAll('[data-label]').some(el=>el.getAttribute('data-label')===label),'responsive label '+label);
 state.modal={key};root=roundTrip('apiKeyDetailModal(state.modal)');
-contains(root,'近 30 天','有效','宽限期','模型：全部模型','协议：全部','到期：永不','预算 不限','创建于 '+new Date(now).toLocaleString('zh-CN'),'（密钥级活动）','从未记录');
+contains(root,'近 7 天','有效','宽限期','模型：全部模型','协议：全部','到期：永不','预算 不限','创建于 '+new Date(now).toLocaleString('zh-CN'),'（密钥级活动）','从未记录');
 for(const [usage,expected] of [
  [{requests:0,failed:0},['0','0','0','0']],
  [{requests:2,failed:1},['2','1','暂不可用','未记录']],
@@ -164,12 +169,12 @@ assert.equal(context.consoleDateTime('invalid date'),'—');
 console.log('PASS rendered locale coverage, scoped queue enums, opaque identifiers/descriptions/diagnostics, dates, attributes and reversible locale switching');
 
 // Detail pages contain generated trace labels alongside opaque upstream evidence.
-await loadFunctions(11,['capabilityNames','candidateExclusionDetail','pageRequestDetail']);
+await loadFunctions(11,['capabilityNames','candidateExclusionDetail','requestTimingSegments','requestTimingWaterfall','requestAttemptTable','pageRequestDetail']);
 context.requestDataSync=()=>({id:'req-test',failed:true,streamMode:'Non-streaming',raw:{},trace:[{kind:'error',time:'12:00',title:'Provider Attempt #2 Failed',sub:'Reference · Cache',latency:'2ms'},{kind:'normal',title:'Caller Affinity Not Reused',sub:'upstream diagnostic'}],routePath:[{status:'Failed',failure:'Reference · Cache',responseModel:'vendor/Queue',latency:'2ms'}]});
 context.fmtCompact=String;
 root=roundTrip("pageRequestDetail('req-test')");
 contains(root,'请求 req-test','非流式','渠道尝试 #2 失败','未复用调用方亲和性','响应模式','所需能力','推理 Token','恢复额外耗时','失败信息','Reference · Cache','vendor/Queue');
-contains(localized("pageRequestDetail('req-test')"),'返回模型：','计价版本','完成耗时');
+contains(localized("pageRequestDetail('req-test')"),'返回模型','计价版本','完成耗时');
 assert.ok(!localized("pageRequestDetail('req-test')",'en-US').textContent.match(/[\u4e00-\u9fff]/),'English detail contains no Chinese product copy');
 contains(localized('pageRequests()'),'下一页');
 console.log('PASS request detail labels, trace titles, pagination and preserved upstream evidence');

@@ -6,6 +6,7 @@
 
 | Task | Guide |
 | --- | --- |
+| Compare key history, model speed and account quotas | [Console monitoring](guide/monitoring.en.md) |
 | Install, initialize and send a first request | [Docker installation](guide/docker.en.md) |
 | Change models without reconfiguring clients | [Logical models](guide/logical-models.en.md) |
 | Connect Hermes to existing accounts | [Hermes Agent](guide/hermes.en.md) |

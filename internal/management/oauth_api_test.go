@@ -587,3 +587,40 @@ func newMgmtFakeTokenServer(t *testing.T, status int, respBody string) *httptest
 	})
 	return httptest.NewServer(mux)
 }
+
+func TestCodexQuotaMembershipUsesAccountIdentity(t *testing.T) {
+	f := oauthAPITest(t)
+	f.cfg.V2DomainSource = config.V2DomainSourceNative
+	f.cfg.Providers = []domain.Provider{{ID: "codex", Type: domain.ProviderCliproxyCodex, Enabled: true, BaseURL: domain.CodexBaseURL, Connections: []domain.ConnectionRef{{ID: "a"}, {ID: "b"}, {ID: "other"}}}}
+	for _, id := range []string{"a", "b", "other"} {
+		f.cfg.Connections = append(f.cfg.Connections, domain.Connection{ID: id, ProviderID: "codex", Enabled: true, Credential: domain.CredentialRef{SecretRef: domain.OAuthRef(id)}})
+	}
+	importAccount := func(name, id string) {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{"tokens": map[string]any{"id_token": mgmtTokenIDToken, "access_token": managementJWT(map[string]any{"exp": time.Now().Add(time.Hour).Unix()}), "refresh_token": "synthetic-refresh", "account_id": id}})
+		if _, err := f.srv.deps.OAuth.ImportAuthJSON(name, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	importAccount("a", "acct-shared")
+	importAccount("b", "acct-shared")
+	importAccount("other", "acct-independent")
+	a, scope := f.srv.codingQuotaMembership("codex", "a")
+	b, _ := f.srv.codingQuotaMembership("codex", "b")
+	other, _ := f.srv.codingQuotaMembership("codex", "other")
+	if a == "" || a != b || a == other || scope != "codex" {
+		t.Fatalf("unexpected groups: %q %q %q", a, b, other)
+	}
+	if strings.Contains(a, "acct-shared") {
+		t.Fatal("upstream account ID exposed through opaque group")
+	}
+	importAccount("b", "acct-replacement")
+	changed, _ := f.srv.codingQuotaMembership("codex", "b")
+	if changed == a {
+		t.Fatal("replacement account reused membership")
+	}
+	rec, _ := f.do(http.MethodGet, "/api/providers/codex/connections/b/oauth/usage?refresh=false&quota_group_id="+a, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale membership accepted: %d", rec.Code)
+	}
+}

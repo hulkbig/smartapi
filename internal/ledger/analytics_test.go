@@ -288,3 +288,62 @@ func TestAnalyticsHistoricalNullsAcrossWindows(t *testing.T) {
 		}
 	}
 }
+
+func TestAnalyticsCallerIdentityAndUnknownHistory(t *testing.T) {
+	l := openTemp(t)
+	from := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	add := func(id, caller, label string, cost float64) {
+		l.BeginRequest(domain.RequestRecord{ID: id, Ts: from, ConsumerKey: label, LogicalModelID: "model", Status: domain.ReqSuccess, Outcome: domain.OutcomeDirectSuccess})
+		if caller != "" {
+			l.BeginObservation(domain.ObservationInput{RequestID: id, At: from, CallerIdentityID: caller})
+		}
+		l.AddAttempt(domain.AttemptRecord{RequestID: id, Seq: 1, Ts: from, ProviderID: "provider", Model: "upstream", Status: domain.ReqSuccess, PlanKind: domain.PlanPAYG, RateCardVersion: "v1", EstCashCost: cost, Usage: domain.Usage{InputTokens: 100, OutputTokens: 10}})
+		l.FinishRequest(id, nil)
+	}
+	add("first", "caller-a", "Same label", 1)
+	add("renamed", "caller-a", "New label", 2)
+	add("other", "caller-b", "Same label", 4)
+	add("historical", "", "Same label", 8)
+	flushLiveTest(t, l.Ledger)
+	query := func(caller string) *Analytics {
+		t.Helper()
+		out, err := l.QueryAnalyticsForCallerWithEstimates(context.Background(), from, to, "", "", caller, func(string, string, int64, int64, int64, int64) *float64 { n := .5; return &n })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	out := query("")
+	if len(out.Callers) != 3 {
+		t.Fatalf("need separate stable callers and unknown history: %#v", out.Callers)
+	}
+	groups := map[string]AnalyticsMetric{}
+	var requests int64
+	var cost float64
+	for _, m := range out.Callers {
+		groups[m.ID] = m
+		requests += m.Requests
+		cost += m.Cost
+	}
+	if groups["caller-a"].Requests != 2 || groups["caller-a"].Cost != 3 || groups["caller-b"].Cost != 4 || groups["__unknown__"].Cost != 8 {
+		t.Fatal("caller attribution must not use mutable or duplicate display names")
+	}
+	if requests != out.Summary.Requests || cost != out.Summary.Cost {
+		t.Fatal("caller totals must reconcile with report totals")
+	}
+	filtered := query("caller-a")
+	if filtered.Summary.Requests != 2 || filtered.Summary.TheoreticalCost != 1 || len(filtered.Callers) != 1 {
+		t.Fatal("caller filter must apply to all attempt estimates and request counts")
+	}
+	for _, caller := range []string{"caller-a", "__unknown__"} {
+		report := query(caller)
+		rows, total, err := l.QueryRequests(domain.LogFilter{From: from, To: to, CallerIdentityID: caller, Limit: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if int64(total) != report.Summary.Requests || len(rows) != total {
+			t.Fatal("drillthrough must match stable or unknown caller cohort")
+		}
+	}
+}

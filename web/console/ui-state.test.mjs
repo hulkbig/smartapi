@@ -67,8 +67,8 @@ assert.match(source, /data-action="reload">Retry/, 'full error state needs recov
 assert.match(source, /Loading SmartAPI Console/, 'initial loading state is required');
 assert.match(source, /No matching requests/, 'request filters need an empty state');
 assert.match(source, /No providers/, 'provider list needs an empty state');
-assert.match(source, /Each provider is one upstream channel/, 'provider must be the single upstream product layer');
-assert.match(source, /One endpoint, credential, and upstream model catalog/, 'provider detail must flatten endpoint, credential, and models');
+assert.match(source, /provider-comparison/, 'providers must support comparison in a table');
+assert.match(source, /Accounts & quota/, 'provider detail must expose the account and quota surface');
 assert.match(source, /data-action="toggle-provider"/, 'provider rows need direct enable and disable actions');
 assert.match(source, /enabled\?'toggle-disable':'toggle-enable'/, 'enable and disable actions need distinct solid semantic treatments');
 assert.match(source, /data-action="test-provider"/, 'provider rows need a direct test action');
@@ -101,13 +101,14 @@ const usageSectionStart = source.indexOf('function providerCodexUsageSection(');
 const usageSectionEnd = source.indexOf('\n}', usageSectionStart);
 assert.ok(usageSectionStart >= 0 && usageSectionEnd > usageSectionStart, 'workspace Codex usage section must remain executable');
 let usageFixture={usage:null,loading:false,error:''};
-const usageSection = new Function('esc','codexUsageView','connectionIsEnabled','providerIsCodex','providerCodexUsageEntry','icon', `${source.slice(usageSectionStart, usageSectionEnd + 2)};return providerCodexUsageSection`)(
+const usageSection = new Function('esc','codexUsageView','connectionIsEnabled','providerIsCodex','providerCodexUsageEntry','icon','providerUsageGroups','providerQuotaMembership','nt', `${source.slice(usageSectionStart, usageSectionEnd + 2)};return providerCodexUsageSection`)(
   value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'),
   usage => usage ? '<usage-view/>' : '<empty-view/>',
   () => true,
   p => p?.raw?.type === 'cliproxy-codex' || p?.type === 'cliproxy-codex' || p?.logo === 'codex',
   () => usageFixture,
   () => '<svg/>',
+  (_p,connections)=>connections.map(connection=>({connection,members:[connection]})),()=>'',en=>en,
 );
 assert.equal(usageSection('p1', {raw:{type:'custom'}}, {}, [{id:'c1'}]), '', 'non-Codex Providers must not render a Codex usage box');
 usageFixture={usage:{plan_type:'pro'},loading:false,error:''};
@@ -135,9 +136,9 @@ assert.match(source, /protocol\.autoConvert=meta\?\.convertible!==false&&convers
 assert.match(source, /TEXT CLIENT ACCESS/, 'channel setup must preview the accepted client protocol surface');
 assert.match(source, /Native first · lossless conversion fallback/, 'channel setup must explain native-first conversion routing');
 assert.match(source, /OpenAI Images remains native-only/, 'channel presets must not imply image-to-text conversion');
-assert.match(source, /native-only features is rejected from an incompatible bridge instead of being silently downgraded/, 'channel presets must disclose the lossless conversion boundary');
-assert.match(source, /Models and native protocol capabilities still come from <strong>Detect native support<\/strong>/, 'channel presets must not replace live capability detection');
-assert.match(source, /Choosing another named channel clears the current credential and detected supply/, 'channel switching must disclose its credential and model reset');
+assert.match(source, /unsupported conversions are rejected/, 'channel presets must disclose the lossless conversion boundary');
+assert.match(source, /Capabilities require verification/, 'channel presets must not replace live capability detection');
+assert.match(source, /Switching to another named preset clears the credential and detected models/, 'channel switching must disclose its credential and model reset');
 assert.match(source, /w\.secret='';w\.credentialRef=''/, 'channel switching must not reuse another provider credential');
 for (const channel of ['OpenAI','Anthropic','Google Gemini','DeepSeek','OpenRouter','SiliconFlow','New API \/ One API']) {
   assert.match(source, new RegExp(`label:'${channel}'`), `${channel} must be available as a channel preset`);
@@ -376,7 +377,7 @@ assert.match(source, /routingValidationErrors/, 'routing validation failures mus
 assert.match(source, /render\(\);showToast\('Logical model deleted'/, 'model deletion must refresh the current list even when the hash is unchanged');
 assert.match(source, /request-filter-card/, 'request filters need a bounded responsive surface');
 assert.match(source, /data-action="request-search-submit"/, 'request filters need an explicit highlighted search action');
-assert.doesNotMatch(source, /data-action="request-refresh"/, 'the retired header refresh action must not compete with search');
+assert.match(source, /state.requestError.*data-action="request-refresh"/, 'query failure needs a local retry action');
 assert.match(source, /data-action='open-conversation-trail'|data-action="open-conversation-trail"/, 'request details need a quick conversation-trail action');
 assert.match(source, /function conversationDrawer/, 'conversation requests need a persistent right-side timeline drawer');
 assert.match(source, /history\.replaceState\(null,'',`#\/requests\//, 'timeline inspection must preserve the open conversation drawer');
@@ -417,16 +418,16 @@ const metadataRequest={
   serviceTier:'fast',responseServiceTier:'priority',trace:[],usageObserved:false,
   routePath:[{model:'configured-alias',responseModel:'attempt-model',serviceTier:'fast',responseServiceTier:'priority',status:'Success'}],
 };
-const renderMetadataRequest=new Function('requestDataSync','state','queueMicrotask','esc','badge','requestCostDetails','capabilityNames','fmtCompact','nt','requestKeySubtitle',
-  source.slice(requestDetailStart,requestDetailEnd)+';return pageRequestDetail;')(
+const renderMetadataRequest=new Function('requestDataSync','state','queueMicrotask','esc','badge','requestCostDetails','capabilityNames','fmtCompact','nt','requestKeySubtitle','detailFailure','uiHint','icon',
+  source.slice(source.indexOf('function requestTimingSegments('),requestDetailEnd)+';return pageRequestDetail;')(
   ()=>metadataRequest,{requestCache:new Map([['metadata-request',metadataRequest]])},()=>{},
-  escapeKey,value=>String(value),()=>'',()=>[],value=>String(value),en=>en,requestKeySubtitle,
+  escapeKey,value=>String(value),()=>'',()=>[],value=>String(value),en=>en,requestKeySubtitle,()=>'',()=>'',()=>'',
 );
 const metadataHTML=renderMetadataRequest('metadata-request');
 assert.match(metadataHTML,/API Key · team-&lt;ops&gt;/,'request details show the escaped key name');
 assert.match(metadataHTML,/configured-alias<\/strong><small>Upstream Model/);
 assert.match(metadataHTML,/observed-&lt;model&gt;<\/strong><small>Returned Model/,'returned models must be separate and HTML escaped');
-assert.match(metadataHTML,/Returned Model: attempt-model/,'attempt metadata must reach the rendered detail');
+assert.match(metadataHTML,/Returned Model<\/dt><dd>attempt-model/,'attempt metadata must reach the rendered detail');
 assert.match(metadataHTML,/Requested service tier<\/span><strong>fast/);
 assert.match(metadataHTML,/Returned service tier<\/span><strong>priority/);
 metadataRequest.responseModel='';metadataRequest.responseServiceTier='';metadataRequest.routePath=[];
@@ -448,7 +449,7 @@ assert.match(source, /sameDialog\?portalViewSnapshot\(preserveScroll\):null/, 'd
 assert.match(source, /if\(snapshot\)restorePortalView\(snapshot\)/, 'dialog rerenders must restore the current control instead of resetting initial focus');
 assert.match(source, /requestAnimationFrame\(\(\)=>\{if\(portalDialogKey\)return;const target=portalResolveFocus\(app,returnFocus\);if\(target\)target\.focus/, 'closing a dialog must restore its still-valid trigger after the page settles');
 assert.match(source, /event\.key==='Tab'&&surface[\s\S]*portalTabTarget\(focusable,document\.activeElement,event\.shiftKey\)/, 'Tab and Shift+Tab must use the active dialog focus boundary');
-assert.match(source, /if\(state\.drawer\|\|state\.modal\)\{event\.preventDefault\(\);closeOverlay\(\);return\}/, 'open dialogs must support the standard Escape dismissal');
+assert.match(source, /if\(state\.drawer\|\|state\.modal\)\{event\.preventDefault\(\);closeOverlay\(true\);return\}/, 'open dialogs must support the standard Escape dismissal');
 assert.match(source, /if\(state\.mobileNav\)\{event\.preventDefault\(\);state\.mobileNav=false;render\(\)\}/, 'Escape must close mobile navigation');
 const portalTabFunction=source.match(/function portalTabTarget\(focusable,active,backward\)\{[\s\S]*?\n\}/)?.[0];
 assert.ok(portalTabFunction, 'the dialog tab-boundary algorithm must remain independently testable');
@@ -504,7 +505,7 @@ assert.match(source, /nextDetailTabs\('providers',id\)/, 'production provider de
 assert.match(styles, /--sidebar-w:\s*250px/, 'desktop v3 shell must use the reviewed navigation proportion');
 assert.match(styles, /v3-overview-grid/, 'v3 Overview grid must ship in the embedded console styles');
 assert.doesNotMatch(source, /pageOverviewV2|routingDrawerV2|pageApiKeysV2|legacyPage/, 'retired v2 visual implementations must not ship');
-assert.match(source, /class="table api-keys-table"/, 'API key columns need stable v3 table sizing');
+assert.match(source, /class="table key-history-table"/, 'API key history columns keep a stable grid');
 assert.match(apiSource, /\/api\/api-keys\/\$\{encodeURIComponent\(id\)\}\/secret/, 'the HTTP adapter must expose persistent administrator key reveal');
 assert.match(apiSource, /tools:false/, 'unverified tool support must fail closed instead of being inferred from a text probe');
 assert.match(apiSource, /text:protocol !== 'openai-images',\s*images:protocol === 'openai-images',\s*stream:false,\s*tools:false/, 'manual models must use protocol-specific conservative defaults');
@@ -583,9 +584,9 @@ assert.match(source,/data-action="pricing-refresh"/);
 assert.match(apiSource,/api\/usage-billing\/pricing\/refresh/);
 console.log('PASS independent timing, read hit rate, reference pricing and full-width quota layout');
 
-const backupSource=parts[5].slice(parts[5].indexOf('function settingsBackup()'));
+const backupSource=parts[5].slice(parts[5].indexOf('function backupExecutionTable()'));
 const backupState={settings:{backup:{enabled:true,interval_hours:24,include_history:false,s3_prefix:'ferry/config',local_copies:2,remote_copies:30}}};
-const renderBackup=new Function('state','esc',`${backupSource};return settingsBackup`)(backupState,value=>String(value).replaceAll('<','&lt;').replaceAll('"','&quot;'));
+const renderBackup=new Function('state','esc','nt','uiHint',`${backupSource};return settingsBackup`)(backupState,value=>String(value).replaceAll('<','&lt;').replaceAll('"','&quot;'),en=>en,()=>'' );
 assert.match(renderBackup(),/s3:\/\/app-backups\/ferry\/config/);
 assert.doesNotMatch(renderBackup(),/data-backup-input="backup-history"/,'scheduled backups cannot include history');
 backupState.settings.backup.s3_prefix='<img src=x onerror=alert(1)>';
@@ -611,7 +612,7 @@ console.log('PASS custom S3 connection submits real parameters and leaves creden
 
 const codexSettingsSource=parts[5].slice(parts[5].indexOf('function settingsCodexVersion()'));
 const codexState={settings:{codex_client_version:'0.161.0-alpha.3',codex_auto_update:true,codex_release_channel:'stable',codex_effective_client_version:'0.161.0-alpha.3',codex_update_status:{status:'manual'}}};
-const renderCodexSettings=new Function('state','esc',codexSettingsSource+';return settingsCodexVersion;')(codexState,value=>String(value).replaceAll('<','&lt;').replaceAll('"','&quot;'));
+const renderCodexSettings=new Function('state','esc','icon',parts[0].slice(parts[0].indexOf('function uiHint('),parts[0].indexOf('const resourceHash'))+codexSettingsSource+';return settingsCodexVersion;')(codexState,value=>String(value).replaceAll('<','&lt;').replaceAll('"','&quot;'),()=>'');
 let codexHTML=renderCodexSettings();
 assert.match(codexHTML,/data-action="codex-auto-update" checked/);
 assert.match(codexHTML,/Manual version takes precedence/);
